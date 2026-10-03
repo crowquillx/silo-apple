@@ -289,6 +289,7 @@ final class ASSSubtitleSession: ObservableObject {
         guard let prepared = seekFrame, prepared.generation == generation, let context = renderContext,
               let track = engine.subtitleTracks.first(where: { $0.id == engine.activeSubtitleTrackIndex }) else { return false }
         let sample = presentationClock(CACurrentMediaTime())
+        guard !usesEngineClock || sample.identity != nil else { return false }
         let time = Self.renderTime(engineTime: sample.sourceTime, timelineOffset: timelineOffset,
                                    isExternal: track.isExternal, delaySeconds: context.delay)
         guard let time = Self.rendererTime(time), prepared.validity.contains(time),
@@ -375,6 +376,7 @@ final class ASSSubtitleSession: ObservableObject {
                                            timelineOffset: timelineOffset, isExternal: track.isExternal,
                                            delaySeconds: delaySeconds)
         }
+        guard !usesEngineClock || sample.identity != nil else { return nil }
         let offset = (track.isExternal ? timelineOffset : 0) - delaySeconds
         if Self.activeEvents(events, at: requestedTime).contains(where: { $0.isTimeVarying }),
            let videoTime = nextSourceFrame(requestedTime - offset, hostTime) {
