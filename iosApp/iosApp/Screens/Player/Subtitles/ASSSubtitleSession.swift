@@ -37,6 +37,7 @@ final class ASSSubtitleSession: ObservableObject {
     private let sampleClock: (CFTimeInterval) -> ASSSubtitlePresentationClock.Sample
     private let nextSourceFrame: (Double, CFTimeInterval) -> Double?
     private let invalidateSourceFrames: () -> Void
+    private let resetFrameLookahead: () -> Void
     private var presentedFrame: PreparedFrame?
     private var fontTask: Task<Void, Never>?
     private struct FontRequest: Equatable {
@@ -92,6 +93,7 @@ final class ASSSubtitleSession: ObservableObject {
         self.presentationClock = sampleClock ?? { clock.presentationSample(atHostTime: $0) }
         self.nextSourceFrame = sampleClock == nil ? { clock.sourceFrameTime(onOrAfter: $0, atHostTime: $1) } : { time, _ in time }
         self.invalidateSourceFrames = sampleClock == nil ? { clock.invalidateVideoFrameTimes() } : {}
+        self.resetFrameLookahead = sampleClock == nil ? { clock.resetLookahead() } : {}
         engine.$activeSubtitleTrackIndex.removeDuplicates().sink { [weak self] trackID in
             self?.selectedTrackID = trackID
             self?.clearSelection()
@@ -124,9 +126,9 @@ final class ASSSubtitleSession: ObservableObject {
                 invalidateSourceFrames()
                 generation &+= 1
                 setFrame(nil)
-            } else {
-                publishSeekFrame()
             }
+            // A transport landing can precede decoded video admission. The
+            // controller publishes only after that frame has been observed.
         }.store(in: &subscriptions)
     }
 
@@ -190,6 +192,7 @@ final class ASSSubtitleSession: ObservableObject {
     func holdPresentation() {
         holdGeneration &+= 1
         if let image = videoSnapshot() { holdDisplay?(image) }
+        resetFrameLookahead()
     }
 
     func prepareForPlayback() async {
@@ -235,6 +238,11 @@ final class ASSSubtitleSession: ObservableObject {
                     previous = next
                 }
                 await waitForDisplay?()
+                guard !Task.isCancelled, enabled else { return }
+                if prepared.generation != generation || epoch != fontGeneration
+                    || engine.activeSubtitleTrackIndex != trackID {
+                    continue
+                }
             }
             return
         }
@@ -278,7 +286,7 @@ final class ASSSubtitleSession: ObservableObject {
     @discardableResult
     private func publishSeekFrame() -> Bool {
         defer { seekFrame = nil }
-        guard let prepared = seekFrame, let context = renderContext,
+        guard let prepared = seekFrame, prepared.generation == generation, let context = renderContext,
               let track = engine.subtitleTracks.first(where: { $0.id == engine.activeSubtitleTrackIndex }) else { return false }
         let sample = presentationClock(CACurrentMediaTime())
         let time = Self.renderTime(engineTime: sample.sourceTime, timelineOffset: timelineOffset,
@@ -287,11 +295,10 @@ final class ASSSubtitleSession: ObservableObject {
               prepared.activeEvents == Self.activeEvents(events, at: time),
               prepared.isStatic || prepared.time == time else { return false }
         guard prepared.isStatic || !engine.isSeeking else { return false }
-        let continuous = sampleClock(CACurrentMediaTime())
-        let landing = engine.isSeeking ? nextSourceFrame(continuous.sourceTime, CACurrentMediaTime()) : continuous.sourceTime
         let ready = PreparedFrame(frame: prepared.frame, time: time, hostTime: CACurrentMediaTime(),
-                                  sourcePresentationTime: (landing ?? continuous.sourceTime) - (continuous.sourceShift ?? 0),
-                                  presentationTime: time, beginsInterval: false, awaitsFrameTimestamp: landing == nil,
+                                  sourcePresentationTime: prepared.sourcePresentationTime,
+                                  presentationTime: prepared.presentationTime, beginsInterval: prepared.beginsInterval,
+                                  awaitsFrameTimestamp: prepared.awaitsFrameTimestamp,
                                   validity: Self.validityInterval(events: events, at: time), generation: generation,
                                   clockIdentity: sample.identity, sourceShift: sample.sourceShift,
                                   isAdvancing: sample.isAdvancing, isTimeVarying: prepared.isTimeVarying,
@@ -306,6 +313,14 @@ final class ASSSubtitleSession: ObservableObject {
               let next = nextSourceFrame(prepared.sourcePresentationTime + (prepared.sourceShift ?? 0) + 0.00001, host),
               next - sampleClock(host).sourceTime <= maximumLead else { return nil }
         return next
+    }
+
+    func decodedFrameDuration(after prepared: PreparedFrame) -> CMTime {
+        guard prepared.isTimeVarying,
+              let next = nextDecodedFrame(after: prepared, maximumLead: 0.25) else { return .invalid }
+        let interval = next - prepared.sourcePresentationTime - (prepared.sourceShift ?? 0)
+        guard interval > 0, interval <= 1 else { return .invalid }
+        return CMTime(seconds: interval, preferredTimescale: 1_000_000_000)
     }
 
     func currentPresentationTime(atHostTime host: CFTimeInterval, delaySeconds: Double) -> Double? {

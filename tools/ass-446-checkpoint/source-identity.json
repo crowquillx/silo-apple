@@ -1,24 +1,23 @@
 {
-  "apple_base": "8f3eb53258ccdbf5cb5341580f5055f56ea7cab4",
+  "apple_base": "33edbe927dffa739451538dde42eb959aca0b338",
   "aether_base": "ec969b734548d09f8324dc18645050cdc94d3018",
   "apple_sources": {
+    "iosApp/Tests/ASSSubtitlePresentationTests.swift": "e0dbb39d88069bb2c272bff37e20042b29cc29dc9e0117c87a9c82bd6928ab57",
     "iosApp/Tests/ASSSubtitleRendererTests.swift": "cc45143574d5b3832b1c07c32bd79f8d685fec6099b911be9c1281dfe0a2a585",
     "iosApp/Tests/Fixtures/ASS/README.md": "849b5c6b279a44e8901f07f827f7b833888a3d716d1a4a2386b94fe74a3f87f5",
-    "iosApp/iosApp/Screens/Player/AetherPlaybackController.swift": "797c05196333ec4ec1b43bf1c4f7b1766462d50aa6883afdd3d352641e0a7a26",
-    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleLayer.swift": "82ec91a847437da843e33a0fa4adb4603cb03b1f95128e69b0be1b6f0cb22aef",
-    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleRenderer.swift": "877a7b0922b6746821ccee56579917b9e0c23ccf2b64760ff21009a3e44dd16a",
-    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleSession.swift": "eae5f4dcc879b385784bceb0839189e73bbadf9da61fa028ff9fb5e3a067e0c3",
-    "iosApp/Tests/ASSSubtitlePresentationTests.swift": "d0398a124a9498e4c68033c761cfa8b72e88e8a7ee81dfdcc277372e6927a667",
     "iosApp/Tests/Fixtures/ASS/authored-no-fonts.mkv": "9bfd770f52104d253cf1ad526ba1023547feb7527e921d2a2bec6c8fc9a3751c",
-    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitlePresentationClock.swift": "a23a81e39a1b5a0039ee9824083519645a02e1081bd8995877eb9ad0e8f08652"
+    "iosApp/iosApp/Screens/Player/AetherPlaybackController.swift": "18d62e998b7d45be1d21d1ab47a857a96f42df054e1a085098338ba08ca13146",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleLayer.swift": "7b8679319b855f19916ea599842114c3b5597f26f9978bb8cfbe299aeef24c62",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitlePresentationClock.swift": "27d2ba0ee8cc523b3d160e95b4ac6b6fc9fc2eb932f6d8604f25a8eedaf96a2a",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleRenderer.swift": "877a7b0922b6746821ccee56579917b9e0c23ccf2b64760ff21009a3e44dd16a",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleSession.swift": "51022e55b3965d3806f169e4c4c58041ce7ef6b8e3c3161ce0459d338eed72fe"
   },
   "aether_sources": {
-    "Sources/AetherEngine/AetherEngine.swift": "a8af2fbe32d8a414edc3f9c22110d658b71cb11657d882a2bbf6f1b43356ad0f",
-    "Sources/AetherEngine/Native/SoftwarePlaybackHost.swift": "e207e0745a83a89e7f0d0334ea3431c320b4e8d0c5c9e285e50c2921c301b888",
+    "Sources/AetherEngine/AetherEngine.swift": "2a2385c212a52fb3b97ef3f120b727188acae8e9a15bbcbf05481106b37daf27",
+    "Sources/AetherEngine/Native/SoftwarePlaybackHost.swift": "0f896e0eb5e03a7e1c1378bdd757f6e007192f05131a8e7218c79c71a31bd388",
     "Sources/AetherEngine/Network/HTTPRequestAuthorization.swift": "2092d08c44cd8709a4c3aa9d377a0688cc25d1146a1b72cf4a16645a1d11e6ac",
-    "Sources/AetherEngine/Renderer/SampleBufferRenderer.swift": "b8db684bf2069e386634a8393eebffced3a6d56c485d1ac12e64fe2b44b69a6c"
+    "Sources/AetherEngine/Renderer/SampleBufferRenderer.swift": "02dc5aff98b127b1de8243856f85238ef222979a616aacc017915d490b792c56"
   },
   "toolchain": "Xcode 27.0\nBuild version 27A266a",
-  "macos": "27.0",
-  "capture": "xcrun simctl io recordVideo --codec=h264; source frame burn-in and Vision OCR; native Codex computer use inspection"
+  "macos": "27.0"
 }

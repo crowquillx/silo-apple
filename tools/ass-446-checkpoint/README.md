@@ -2,7 +2,7 @@
 
 This is work in progress, saved from the rental Mac at the user’s request. It is not a release or a claim of frame-perfect playback. No issue, PR, or comment was created.
 
-The Apple change renders ASS against actual decoded source frame timestamps, schedules transparent subtitle buffers on the video presentation timebase, gates initial playback on font and raster readiness, and preserves matching video/subtitle images during transport changes. The Aether changes expose displayed software frame timestamps and fix paused seek admission.
+The Apple change renders ASS against actual decoded source frame timestamps, schedules transparent subtitle buffers on the video presentation timebase, gates initial playback on font and raster readiness, and preserves matching video/subtitle images during transport changes. The Aether changes expose displayed software pixels and timestamps through IOSurface identity and fix paused seek admission. Native AVPlayer uses separate outputs for current-frame reads and future-frame warming.
 
 ## Required dependency patch
 
@@ -16,10 +16,13 @@ The 24 fps source video burns each frame number and timestamp into the image. St
 
 ## Validation status at this checkpoint
 
-- iOS focused renderer/presentation tests: 23 passed on candidate 34.
-- iOS and tvOS software and native AVPlayer (`remoteBypass`) optical harness executions passed on candidate 35, including onset, controls, drift, and replacement. These assertions verify route and transport state, not every optical frame.
-- Frame analysis still flags pause/resume, seek, speed, and pending track/delay changes. Some are pending-state or OCR artifacts; the remaining cases require correction and retesting. Do not report frame-perfect playback yet.
-- Real server media was accessed earlier, but final source playback must be rechecked. Credentials and raw server data are excluded.
-- macOS final route checks, native loopback, final focused tests, and unsigned physical-device IPA builds remain pending. Physical-device playback is untested. Earlier IPAs are obsolete.
+This second checkpoint includes candidate 41. Its new native lookahead reset and speed-change gate still need optical validation.
 
-Recordings, screenshots, detailed frame CSVs, private logs, and build outputs remain outside Git at `/Users/m1/silo-446-build/validation-20261003-032038`. This checkpoint backs up implementation, synthetic test inputs, and recovery tools to the fork. It does not upload recordings or IPAs; those require a separate off-device transfer. `source-identity.json` records the pre-checkpoint base and exact changed file hashes. Subsequent results must identify subsequent source changes.
+- iOS focused renderer/presentation tests: 24 passed on candidate 38.
+- iOS software candidate 38 and native AVPlayer (`remoteBypass`) candidate 39: first cue appears on source frame 48, with no subtitle visible before that frame. Animation phase has no mismatches in the onset and sampled pause/resume and seek captures. Pixel-position tolerance is four source pixels; frame counters establish the timing oracle.
+- Full iOS/tvOS optical harness executions have passed through candidate 40b. Harness assertions verify route and transport state; quantitative frame analysis remains required.
+- Later delay, speed, and track-change captures still include failures and pending-state transients. Candidate 41 resets the native future-frame reader when playback is prepared again and gates speed changes. Do not report frame-perfect playback yet.
+- macOS software, native AVPlayer (`remoteBypass`), and native loopback have played controlled fixtures through native computer use. Final-source repeats remain pending.
+- Final real server playback, final focused tests, SSA coverage, and unsigned physical-device IPA builds remain pending. Physical-device playback is untested. Earlier IPAs are obsolete.
+
+Recordings, screenshots, detailed frame CSVs, private logs, and build outputs remain outside Git at `/Users/m1/silo-446-build/validation-20261003-032038`. This checkpoint backs up implementation, synthetic test inputs, and recovery tools to the fork. It does not upload recordings or IPAs; those require a separate off-device transfer. The parallel Vision helper builds with `swiftc -O ocr-frames-parallel.swift -o ocr-frames-parallel`. `source-identity.json` records the pre-checkpoint base and exact changed file hashes. Subsequent results must identify subsequent source changes.
