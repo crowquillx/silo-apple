@@ -6,7 +6,7 @@ The Apple change renders ASS against actual decoded source frame timestamps, sch
 
 ## Required dependency patch
 
-The Apple sources require the APIs in `aether-engine.patch`. Apply it to AetherEngine at `ec969b734548d09f8324dc18645050cdc94d3018` before building. The rental’s shared checkout is `/Users/m1/silo-446-build/SourcePackages/checkouts/AetherEngine`; Xcode builds use `-clonedSourcePackagesDirPath /Users/m1/silo-446-build/SourcePackages -disableAutomaticPackageResolution`. A clean upstream dependency alone is insufficient. No package pin or signing configuration was changed.
+The Apple sources require the APIs in `aether-engine.patch`. Apply it to AetherEngine at `b1e4879e6a41477ebef3b68e8d9f65239d1ba80b` before building. The rental’s shared checkout is `/Users/m1/silo-446-build/SourcePackages/checkouts/AetherEngine`; Xcode builds use `-clonedSourcePackagesDirPath /Users/m1/silo-446-build/SourcePackagesRebased -disableAutomaticPackageResolution`. A clean upstream dependency alone is insufficient. No package pin or signing configuration was changed.
 
 ## Recovery harness
 
@@ -28,3 +28,9 @@ Candidate 43 preserves native decoder surfaces and maps the paused AVPlayerLayer
 - Unsigned IPAs remain deferred until the timing fix meets the user's frame-perfect target. Earlier IPAs are obsolete. Physical-device installation and playback are untested.
 
 Recordings, screenshots, detailed frame CSVs, private logs, and build outputs remain outside Git at `/Users/m1/silo-446-build/validation-20261003-032038` and `/Users/m1/silo-446-build/validation-20261003-154659`. This checkpoint backs up implementation, synthetic test inputs, and recovery tools to the fork. It does not upload recordings or IPAs; those require a separate off-device transfer. The parallel Vision helper builds with `swiftc -O ocr-frames-parallel.swift -o ocr-frames-parallel`. `source-identity.json` records the pre-checkpoint base and exact changed file hashes. Subsequent results must identify subsequent source changes.
+
+## Rebase and paired-frame experiment
+
+The branch was rebased cleanly onto upstream main `c5ae80fc04d8e23be55c6fcd28ec8b5859158ee6`. Main pins official AetherEngine at `b1e4879e6a41477ebef3b68e8d9f65239d1ba80b`; the recovery dependency patch was rebased cleanly to that revision. The dependency changes are local and are not included in that upstream pin.
+
+`paired-video-prototype.patch` preserves the separate experiment relative to the rebased Apple checkpoint. It is not applied to the production files in this checkpoint. The prototype combines the exact decoded video frame and its ASS raster into one queued pixel buffer, preserving source size, format and propagated color attachments. It adds three composition tests. The prior-base iOS native and software full captures showed no measured phase mismatches after controls applied, including onset, seeks and drift. Pending-operation intervals remain in the raw captures and are reported separately using playback-clock progress, independently of subtitle pixels. Fresh rebased optical checks and final iOS/tvOS validation are pending; do not treat the experiment as release-ready.
