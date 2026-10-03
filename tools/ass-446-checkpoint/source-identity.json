@@ -1,0 +1,24 @@
+{
+  "apple_base": "8f3eb53258ccdbf5cb5341580f5055f56ea7cab4",
+  "aether_base": "ec969b734548d09f8324dc18645050cdc94d3018",
+  "apple_sources": {
+    "iosApp/Tests/ASSSubtitleRendererTests.swift": "cc45143574d5b3832b1c07c32bd79f8d685fec6099b911be9c1281dfe0a2a585",
+    "iosApp/Tests/Fixtures/ASS/README.md": "849b5c6b279a44e8901f07f827f7b833888a3d716d1a4a2386b94fe74a3f87f5",
+    "iosApp/iosApp/Screens/Player/AetherPlaybackController.swift": "797c05196333ec4ec1b43bf1c4f7b1766462d50aa6883afdd3d352641e0a7a26",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleLayer.swift": "82ec91a847437da843e33a0fa4adb4603cb03b1f95128e69b0be1b6f0cb22aef",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleRenderer.swift": "877a7b0922b6746821ccee56579917b9e0c23ccf2b64760ff21009a3e44dd16a",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleSession.swift": "eae5f4dcc879b385784bceb0839189e73bbadf9da61fa028ff9fb5e3a067e0c3",
+    "iosApp/Tests/ASSSubtitlePresentationTests.swift": "d0398a124a9498e4c68033c761cfa8b72e88e8a7ee81dfdcc277372e6927a667",
+    "iosApp/Tests/Fixtures/ASS/authored-no-fonts.mkv": "9bfd770f52104d253cf1ad526ba1023547feb7527e921d2a2bec6c8fc9a3751c",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitlePresentationClock.swift": "a23a81e39a1b5a0039ee9824083519645a02e1081bd8995877eb9ad0e8f08652"
+  },
+  "aether_sources": {
+    "Sources/AetherEngine/AetherEngine.swift": "a8af2fbe32d8a414edc3f9c22110d658b71cb11657d882a2bbf6f1b43356ad0f",
+    "Sources/AetherEngine/Native/SoftwarePlaybackHost.swift": "e207e0745a83a89e7f0d0334ea3431c320b4e8d0c5c9e285e50c2921c301b888",
+    "Sources/AetherEngine/Network/HTTPRequestAuthorization.swift": "2092d08c44cd8709a4c3aa9d377a0688cc25d1146a1b72cf4a16645a1d11e6ac",
+    "Sources/AetherEngine/Renderer/SampleBufferRenderer.swift": "b8db684bf2069e386634a8393eebffced3a6d56c485d1ac12e64fe2b44b69a6c"
+  },
+  "toolchain": "Xcode 27.0\nBuild version 27A266a",
+  "macos": "27.0",
+  "capture": "xcrun simctl io recordVideo --codec=h264; source frame burn-in and Vision OCR; native Codex computer use inspection"
+}

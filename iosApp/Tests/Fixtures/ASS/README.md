@@ -16,4 +16,10 @@ ffmpeg -f lavfi -i color=c=black:s=320x180:r=24:d=8 \
   -metadata:s:t filename=SiloASSFixture.ttf -y authored.mkv
 ```
 
+The font-download startup regression uses the same media without attachments:
+
+```sh
+ffmpeg -i authored.mkv -map 0:v -map 0:a -map 0:s -c copy authored-no-fonts.mkv
+```
+
 The fixtures are included only in the test bundle.
