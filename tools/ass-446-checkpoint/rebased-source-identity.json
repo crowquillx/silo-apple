@@ -1,0 +1,9 @@
+{
+  "apple_base": "c5ae80fc04d8e23be55c6fcd28ec8b5859158ee6",
+  "apple_checkpoint_before_this_save": "0cc2b4ba9f4c3b2e748dcd19a08d9cac42893c88",
+  "aether_base": "b1e4879e6a41477ebef3b68e8d9f65239d1ba80b",
+  "files": {
+    "tools/ass-446-checkpoint/aether-engine.patch": "b9400333402f4796b033d5036b9b16d03c4cc8f6a971e90e3ffa0ab18adce0fb",
+    "tools/ass-446-checkpoint/paired-video-prototype.patch": "2f467cefd5151ac2221412b65de14c2e3484f493811adeeec56f5d074a2c47f4"
+  }
+}

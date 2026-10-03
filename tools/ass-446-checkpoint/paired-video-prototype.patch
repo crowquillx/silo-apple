@@ -1,0 +1,282 @@
+diff --git a/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleLayer.swift b/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleLayer.swift
+index 8faa8d3a..82e83daf 100644
+--- a/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleLayer.swift
++++ b/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleLayer.swift
+@@ -1,5 +1,6 @@
+ import AVFoundation
+ import Combine
++import CoreImage
+ import IOSurface
+ import QuartzCore
+ import SwiftUI
+@@ -567,26 +568,23 @@ private final class ASSSubtitleDisplayDriver: NSObject {
+         }
+     }
+ 
++    private let frameCompositor = ASSSubtitleFrameCompositor()
++
+     private func sampleBuffer(_ prepared: ASSSubtitleSession.PreparedFrame, empty: Bool = false, time: Double? = nil) -> CMSampleBuffer? {
+-        let width = Int((videoRect.width * scale).rounded())
+-        let height = Int((videoRect.height * scale).rounded())
+-        var pixel: CVPixelBuffer?
+-        guard width > 0, height > 0,
+-            CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+-                [kCVPixelBufferIOSurfacePropertiesKey: [:], kCVPixelBufferCGImageCompatibilityKey: true,
+-                 kCVPixelBufferCGBitmapContextCompatibilityKey: true] as CFDictionary, &pixel) == kCVReturnSuccess,
+-            let pixel else { return nil }
+-        CVPixelBufferLockBaseAddress(pixel, [])
+-        defer { CVPixelBufferUnlockBaseAddress(pixel, []) }
+-        guard let context = CGContext(data: CVPixelBufferGetBaseAddress(pixel), width: width, height: height,
+-              bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixel), space: CGColorSpaceCreateDeviceRGB(),
+-              bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue) else { return nil }
+-        context.clear(CGRect(x: 0, y: 0, width: width, height: height))
+-        if !empty, let frame = prepared.frame {
+-            let rect = CGRect(x: frame.rect.minX * scale,
+-                              y: CGFloat(height) - frame.rect.maxY * scale,
+-                              width: frame.rect.width * scale, height: frame.rect.height * scale)
+-            context.draw(frame.image, in: rect)
++        let pixel: CVPixelBuffer
++        if !empty {
++            guard let input = session?.pairedVideoPixel(prepared.sourcePresentationTime),
++                  let paired = frameCompositor.composite(input, frame: prepared.frame, canvasSize: videoRect.size) else { return nil }
++            pixel = paired
++        } else {
++            var clear: CVPixelBuffer?
++            guard CVPixelBufferCreate(kCFAllocatorDefault, 2, 2, kCVPixelFormatType_32BGRA,
++                [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &clear) == kCVReturnSuccess,
++                  let clear else { return nil }
++            CVPixelBufferLockBaseAddress(clear, [])
++            if let bytes = CVPixelBufferGetBaseAddress(clear) { memset(bytes, 0, CVPixelBufferGetDataSize(clear)) }
++            CVPixelBufferUnlockBaseAddress(clear, [])
++            pixel = clear
+         }
+         var format: CMVideoFormatDescription?
+         guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
+@@ -604,6 +602,7 @@ private final class ASSSubtitleDisplayDriver: NSObject {
+     private func show(_ frame: ASSSubtitleRenderer.Frame?) {
+         if session?.handlesCurrentTrack != true {
+             releaseHeldDisplay()
++            frameCompositor.reset()
+             scheduledRasters.removeAll(keepingCapacity: true)
+             sampleLayer.sampleBufferRenderer.flush(removingDisplayedImage: true) { }
+             sampleLayerPrimed = false
+@@ -633,3 +632,49 @@ private final class ASSSubtitleDisplayDriver: NSObject {
+         CATransaction.commit()
+     }
+ }
++
++/// Compose authored pixels with their exact decoded video frame before enqueue.
++/// The output keeps the source dimensions, pixel format and propagated color metadata.
++@MainActor
++final class ASSSubtitleFrameCompositor {
++    private let compositeContext = CIContext(options: [.cacheIntermediates: false])
++    private var compositePool: CVPixelBufferPool?
++    private var compositeFormat: (width: Int, height: Int, format: OSType)?
++
++    func reset() { compositePool = nil; compositeFormat = nil }
++
++    func composite(_ input: CVPixelBuffer, frame: ASSSubtitleRenderer.Frame?, canvasSize: CGSize) -> CVPixelBuffer? {
++        guard let frame else { return input }
++        guard canvasSize.width > 0, canvasSize.height > 0 else { return nil }
++        let width = CVPixelBufferGetWidth(input)
++        let height = CVPixelBufferGetHeight(input)
++        let format = CVPixelBufferGetPixelFormatType(input)
++        if compositeFormat?.width != width || compositeFormat?.height != height || compositeFormat?.format != format {
++            let attributes: [CFString: Any] = [kCVPixelBufferWidthKey: width, kCVPixelBufferHeightKey: height,
++                kCVPixelBufferPixelFormatTypeKey: format, kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
++                kCVPixelBufferMetalCompatibilityKey: true]
++            var pool: CVPixelBufferPool?
++            guard CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attributes as CFDictionary, &pool) == kCVReturnSuccess else { return nil }
++            compositePool = pool
++            compositeFormat = (width, height, format)
++        }
++        guard let compositePool else { return nil }
++        var pixel: CVPixelBuffer?
++        guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, compositePool, &pixel) == kCVReturnSuccess,
++              let pixel else { return nil }
++        CVBufferRemoveAllAttachments(pixel)
++        CVBufferPropagateAttachments(input, pixel)
++        let base = CIImage(cvPixelBuffer: input)
++        let sx = CGFloat(width) / canvasSize.width
++        let sy = CGFloat(height) / canvasSize.height
++        let overlay = CIImage(cgImage: frame.image).transformed(by: CGAffineTransform(
++            scaleX: frame.rect.width * sx / CGFloat(frame.image.width),
++            y: frame.rect.height * sy / CGFloat(frame.image.height)))
++            .transformed(by: CGAffineTransform(translationX: frame.rect.minX * sx,
++                y: CGFloat(height) - frame.rect.maxY * sy))
++        compositeContext.render(overlay.composited(over: base), to: pixel,
++            bounds: CGRect(x: 0, y: 0, width: width, height: height), colorSpace: base.colorSpace)
++        return pixel
++    }
++
++}
+diff --git a/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleSession.swift b/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleSession.swift
+index bd90a8f9..6b75367c 100644
+--- a/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleSession.swift
++++ b/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleSession.swift
+@@ -23,6 +23,7 @@ final class ASSSubtitleSession: ObservableObject {
+     var holdDisplay: ((ASSSubtitlePresentationClock.VideoSnapshot) -> Void)?
+     var releaseDisplay: (() -> Void)?
+     private let videoSnapshot: () -> ASSSubtitlePresentationClock.VideoSnapshot?
++    let pairedVideoPixel: (Double) -> CVPixelBuffer?
+     private var holdGeneration: UInt64 = 0
+     @Published private(set) var isLoadingFonts = false
+     @Published private(set) var failureMessage: String?
+@@ -89,6 +90,7 @@ final class ASSSubtitleSession: ObservableObject {
+         self.fontLoader = fontLoader
+         let clock = ASSSubtitlePresentationClock(engine: engine)
+         self.videoSnapshot = { clock.videoSnapshot() }
++        self.pairedVideoPixel = { clock.videoPixel(atItemTime: $0) }
+         self.sampleClock = sampleClock ?? { clock.sample(atHostTime: $0) }
+         self.presentationClock = sampleClock ?? { clock.presentationSample(atHostTime: $0) }
+         self.nextSourceFrame = sampleClock == nil ? { clock.sourceFrameTime(onOrAfter: $0, atHostTime: $1) } : { time, _ in time }
+@@ -159,6 +161,7 @@ final class ASSSubtitleSession: ObservableObject {
+     func finishLoad() { enabled = true }
+ 
+     func stop() {
++        invalidateSourceFrames()
+         enabled = false
+         fontRequests = [:]
+         fontCache = [:]
+@@ -365,12 +368,13 @@ final class ASSSubtitleSession: ObservableObject {
+         }
+         let epoch = generation
+         let worker = renderer
++        let pairsVideoFrames = engine.currentAVPlayer != nil || engine.videoRoute == .software
+         let continuous = sampleClock(hostTime)
+         var sample = continuous
+         var requestedTime = Self.renderTime(engineTime: sourceTime ?? sample.sourceTime,
+                                    timelineOffset: timelineOffset, isExternal: track.isExternal,
+                                    delaySeconds: delaySeconds)
+-        if sourceTime == nil, Self.activeEvents(events, at: requestedTime).contains(where: { $0.isTimeVarying }) {
++        if sourceTime == nil, pairsVideoFrames || Self.activeEvents(events, at: requestedTime).contains(where: { $0.isTimeVarying }) {
+             sample = presentationClock(hostTime)
+             requestedTime = Self.renderTime(engineTime: sample.sourceTime,
+                                            timelineOffset: timelineOffset, isExternal: track.isExternal,
+@@ -378,7 +382,7 @@ final class ASSSubtitleSession: ObservableObject {
+         }
+         guard !usesEngineClock || sample.identity != nil else { return nil }
+         let offset = (track.isExternal ? timelineOffset : 0) - delaySeconds
+-        if Self.activeEvents(events, at: requestedTime).contains(where: { $0.isTimeVarying }),
++        if pairsVideoFrames || Self.activeEvents(events, at: requestedTime).contains(where: { $0.isTimeVarying }),
+            let videoTime = nextSourceFrame(requestedTime - offset, hostTime) {
+             // The raster and its queued timestamp must describe the same frame,
+             // including a seek target between two decoded video timestamps.
+@@ -386,7 +390,7 @@ final class ASSSubtitleSession: ObservableObject {
+         }
+         guard let time = Self.rendererTime(requestedTime) else { return nil }
+         let activeEvents = Self.activeEvents(events, at: time)
+-        let varying = activeEvents.contains { $0.isTimeVarying }
++        let varying = pairsVideoFrames || activeEvents.contains { $0.isTimeVarying }
+         let validity = Self.validityInterval(events: events, at: time)
+         let boundary = varying || !validity.lowerBound.isFinite ? requestedTime : validity.lowerBound
+         let alignedSource = nextSourceFrame(boundary - offset, hostTime)
+diff --git a/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitlePresentationClock.swift b/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitlePresentationClock.swift
+index fa372432..b0b38ada 100644
+--- a/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitlePresentationClock.swift
++++ b/iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitlePresentationClock.swift
+@@ -257,6 +257,11 @@ final class ASSSubtitlePresentationClock {
+         return VideoSnapshot(image: rendered, itemTime: itemTime)
+     }
+ 
++    func videoPixel(atItemTime time: Double) -> CVPixelBuffer? {
++        engine.videoRoute == .software ? engine.softwareVideoFramePixel(at: time)
++            : nativePixels.first(where: { abs($0.key - time) < 0.000001 })?.value
++    }
++
+     private func configureNativeOutputs(for item: AVPlayerItem) {
+         guard outputItem !== item else { return }
+         if let outputItem {
+@@ -298,8 +303,13 @@ final class ASSSubtitlePresentationClock {
+                 nativeSurfaceTimes.removeValue(forKey: nativeSurfaceOrder.removeFirst())
+             }
+         }
++        if !engine.isSeeking {
++            let current = sample(atHostTime: CACurrentMediaTime())
++            let itemTime = current.sourceTime - (current.sourceShift ?? 0)
++            if itemTime.isFinite { nativePixels = nativePixels.filter { $0.key >= itemTime - 0.1 } }
++        }
+         nativePixels[time] = pixel
+-        while nativePixels.count > 6, let first = nativePixels.keys.min() { nativePixels.removeValue(forKey: first) }
++        while nativePixels.count > 32, let first = nativePixels.keys.min() { nativePixels.removeValue(forKey: first) }
+         if !nativeFrameTimes.contains(time) {
+             nativeFrameTimes.append(time)
+             nativeFrameTimes.sort()
+diff --git a/iosApp/Tests/ASSSubtitlePresentationTests.swift b/iosApp/Tests/ASSSubtitlePresentationTests.swift
+index 0d6247a3..7346c7fa 100644
+--- a/iosApp/Tests/ASSSubtitlePresentationTests.swift
++++ b/iosApp/Tests/ASSSubtitlePresentationTests.swift
+@@ -406,3 +406,73 @@ final class ASSSubtitlePresentationTests: XCTestCase {
+         XCTAssertTrue(session.present(current, atHostTime: 12, delaySeconds: 0))
+     }
+ }
++
++import CoreImage
++import CoreVideo
++
++@MainActor
++final class ASSSubtitleFrameCompositionTests: XCTestCase {
++    private let size = CGSize(width: 64, height: 64)
++    private let linear = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
++    private lazy var context = CIContext(options: [.cacheIntermediates: false, .workingColorSpace: linear])
++
++    private func video(format: OSType, hdr: Bool = false) throws -> CVPixelBuffer {
++        var pixel: CVPixelBuffer?
++        XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 64, 64, format,
++            [kCVPixelBufferIOSurfacePropertiesKey: [:], kCVPixelBufferMetalCompatibilityKey: true] as CFDictionary, &pixel), kCVReturnSuccess)
++        let buffer = try XCTUnwrap(pixel)
++        let transfer = hdr ? kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ : kCVImageBufferTransferFunction_ITU_R_709_2
++        let primaries = hdr ? kCVImageBufferColorPrimaries_ITU_R_2020 : kCVImageBufferColorPrimaries_ITU_R_709_2
++        let matrix = hdr ? kCVImageBufferYCbCrMatrix_ITU_R_2020 : kCVImageBufferYCbCrMatrix_ITU_R_709_2
++        CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, transfer, .shouldPropagate)
++        CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, primaries, .shouldPropagate)
++        CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey, matrix, .shouldPropagate)
++        let color = try XCTUnwrap(CGColor(colorSpace: linear, components: hdr ? [4, 2, 1, 1] : [0.1, 0.2, 0.6, 1]))
++        context.render(CIImage(color: CIColor(cgColor: color)), to: buffer,
++            bounds: CGRect(origin: .zero, size: size), colorSpace: CGColorSpace(name: hdr ? CGColorSpace.itur_2100_PQ : CGColorSpace.itur_709))
++        return buffer
++    }
++
++    private func subtitle() throws -> ASSSubtitleRenderer.Frame {
++        let image = try XCTUnwrap(context.createCGImage(CIImage(color: .white), from: CGRect(x: 0, y: 0, width: 8, height: 8)))
++        return ASSSubtitleRenderer.Frame(image: image, rect: CGRect(x: 8, y: 8, width: 16, height: 12))
++    }
++
++    private func rgba(_ pixel: CVPixelBuffer) -> [Float] {
++        var values = [Float](repeating: 0, count: 64 * 64 * 4)
++        values.withUnsafeMutableBytes {
++            context.render(CIImage(cvPixelBuffer: pixel), toBitmap: $0.baseAddress!, rowBytes: 64 * 4 * MemoryLayout<Float>.size,
++                bounds: CGRect(origin: .zero, size: size), format: .RGBAf, colorSpace: linear)
++        }
++        return values
++    }
++
++    func testEmptyCueKeepsDecodedVideoBuffer() throws {
++        let input = try video(format: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
++        XCTAssertTrue(ASSSubtitleFrameCompositor().composite(input, frame: nil, canvasSize: size) === input)
++    }
++
++    func testSDRCompositionPreservesPictureAndPlacesSubtitle() throws {
++        let input = try video(format: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
++        let output = try XCTUnwrap(ASSSubtitleFrameCompositor().composite(input, frame: subtitle(), canvasSize: size))
++        XCTAssertEqual(CVPixelBufferGetPixelFormatType(output), CVPixelBufferGetPixelFormatType(input))
++        XCTAssertEqual(CVPixelBufferGetWidth(output), 64)
++        XCTAssertEqual(CVPixelBufferGetHeight(output), 64)
++        let original = rgba(input), actual = rgba(output)
++        for channel in 0..<3 { XCTAssertEqual(actual[(32 * 64 + 32) * 4 + channel], original[(32 * 64 + 32) * 4 + channel], accuracy: 0.02) }
++        for channel in 0..<3 { XCTAssertGreaterThan(actual[(12 * 64 + 12) * 4 + channel], 0.9) }
++        XCTAssertEqual(CVBufferCopyAttachment(output, kCVImageBufferTransferFunctionKey, nil) as? String, kCVImageBufferTransferFunction_ITU_R_709_2 as String)
++    }
++
++    func testHDRCompositionKeepsTenBitPQMetadataAndHighlightValues() throws {
++        let input = try video(format: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange, hdr: true)
++        let output = try XCTUnwrap(ASSSubtitleFrameCompositor().composite(input, frame: subtitle(), canvasSize: size))
++        XCTAssertEqual(CVPixelBufferGetPixelFormatType(output), kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)
++        XCTAssertEqual(CVBufferCopyAttachment(output, kCVImageBufferTransferFunctionKey, nil) as? String, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ as String)
++        XCTAssertEqual(CVBufferCopyAttachment(output, kCVImageBufferColorPrimariesKey, nil) as? String, kCVImageBufferColorPrimaries_ITU_R_2020 as String)
++        let original = rgba(input), actual = rgba(output)
++        let offset = (32 * 64 + 32) * 4
++        XCTAssertGreaterThan(original[offset], 1)
++        for channel in 0..<3 { XCTAssertEqual(actual[offset + channel], original[offset + channel], accuracy: 0.08) }
++    }
++}
