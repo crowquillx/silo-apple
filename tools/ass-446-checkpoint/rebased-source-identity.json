@@ -1,9 +1,15 @@
 {
   "apple_base": "c5ae80fc04d8e23be55c6fcd28ec8b5859158ee6",
-  "apple_checkpoint_before_this_save": "0cc2b4ba9f4c3b2e748dcd19a08d9cac42893c88",
+  "checkpoint_parent": "37335ffe193f1f367b0b0ff62de096cfb783d30c",
   "aether_base": "b1e4879e6a41477ebef3b68e8d9f65239d1ba80b",
   "files": {
-    "tools/ass-446-checkpoint/aether-engine.patch": "b9400333402f4796b033d5036b9b16d03c4cc8f6a971e90e3ffa0ab18adce0fb",
-    "tools/ass-446-checkpoint/paired-video-prototype.patch": "2f467cefd5151ac2221412b65de14c2e3484f493811adeeec56f5d074a2c47f4"
+    "iosApp/Tests/ASSSubtitlePresentationTests.swift": "5939d8561ec2cc7cf92f58b0b0b8dc23da230dcd5ed90f7d697f6ff0b7b68ee8",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleLayer.swift": "6cb7a7155232ca3a98fb5e752c8c661398d23dc2ee95c9ead369f7df63aee847",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitlePresentationClock.swift": "f837cd0ca38aea049c6ee3452313bcc2c4b86fdb089dfe9cf9563e6bcdc5c089",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleSession.swift": "c2d489043921c044d0d47ebd313e474825c63e34c70e1b29d724c9b6b3dfd018",
+    "tools/ass-446-checkpoint/ASSSubtitleOpticalCaptureTests.swift": "7b4faa115585cbb0a121ddf26d18c23eed53974169c0ce96dc3635eefee65d9f",
+    "tools/ass-446-checkpoint/README.md": "8609887fa23bd17762b65b1d308219d5b4a974bb9e356cddf5b52161564b89a9",
+    "tools/ass-446-checkpoint/aether-engine.patch": "7d550bc351b2a118fa019ce592cff0a06e2f87b50e5f78a95cc0eef47fb8ed72",
+    "tools/ass-446-checkpoint/run-optical.py": "50b73dd8479d49df1109f1f9a1bb7550882c1fa0a128c4321191009aff94f8f2"
   }
 }

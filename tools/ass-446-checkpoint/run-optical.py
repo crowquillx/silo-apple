@@ -8,8 +8,11 @@ scheme='Silo' if platform=='ios' else 'SiloTV'; bundle='SiloTests' if platform==
 base=f'{platform}-{route}' + ('-'+suffix if suffix else ''); base += '-retry' if (out/f'{base}.xcresult').exists() else ''; logfile=out/f'{base}.log'
 testmethod = f'ASSSubtitleLegacyCaptureTests/testIssue446At{route[6:]}FPS' if route.startswith('legacy') else f'ASSSubtitleOpticalCaptureTests/test{"Short" if suffix and not suffix.endswith("full") else "Extended"}{"Software" if route=="software" else "Native"}'
 if 'animated' in suffix: testmethod = f'ASSSubtitleOpticalCaptureTests/test{"Extended" if suffix.endswith("full") else ""}Animated{"Software" if route=="software" else "Native"}'
+if 'ssa' in suffix: testmethod = 'ASSSubtitleOpticalCaptureTests/testSSA' + ('Software' if route=='software' else 'Native')
 if 'transport' in suffix: testmethod = 'ASSSubtitleOpticalCaptureTests/testTransport' + ('Software' if route=='software' else 'Native')
-cmd=['xcodebuild' ,'test-without-building','-project','/Users/m1/silo-446-optical/iosApp/Silo.xcodeproj','-scheme',scheme,'-destination',f'platform={"iOS" if platform=="ios" else "tvOS"} Simulator,id={device}','-derivedDataPath','/Users/m1/silo-446-build/OpticalDerivedData','-clonedSourcePackagesDirPath','/Users/m1/silo-446-build/SourcePackages','-only-testing',f'{bundle}/{testmethod}','-parallel-testing-enabled','NO','-resultBundlePath',str(out/f'{base}.xcresult')]
+if route=='loopback':
+ testmethod='ASSSubtitleOpticalCaptureTests/test' + ('TransportLoopback' if 'transport' in suffix else 'ExtendedAnimatedLoopback')
+cmd=['xcodebuild'  ,'test-without-building','-project','/Users/m1/silo-446-optical/iosApp/Silo.xcodeproj','-scheme',scheme,'-destination',f'platform={"iOS" if platform=="ios" else "tvOS"} Simulator,id={device}','-derivedDataPath','/Users/m1/silo-446-build/OpticalDerivedData','-clonedSourcePackagesDirPath','/Users/m1/silo-446-build/SourcePackagesRebased','-only-testing',f'{bundle}/{testmethod}','-parallel-testing-enabled','NO','-resultBundlePath',str(out/f'{base}.xcresult')]
 with logfile.open('w') as log:
  proc=subprocess.Popen(cmd,stdout=log,stderr=subprocess.STDOUT)
  active=None; stop_at=0; done=set(); recordings=[]

@@ -23,6 +23,7 @@ final class ASSSubtitleSession: ObservableObject {
     var holdDisplay: ((ASSSubtitlePresentationClock.VideoSnapshot) -> Void)?
     var releaseDisplay: (() -> Void)?
     private let videoSnapshot: () -> ASSSubtitlePresentationClock.VideoSnapshot?
+    let pairedVideoPixel: (Double) -> CVPixelBuffer?
     private var holdGeneration: UInt64 = 0
     @Published private(set) var isLoadingFonts = false
     @Published private(set) var failureMessage: String?
@@ -89,6 +90,7 @@ final class ASSSubtitleSession: ObservableObject {
         self.fontLoader = fontLoader
         let clock = ASSSubtitlePresentationClock(engine: engine)
         self.videoSnapshot = { clock.videoSnapshot() }
+        self.pairedVideoPixel = { clock.videoPixel(atItemTime: $0) }
         self.sampleClock = sampleClock ?? { clock.sample(atHostTime: $0) }
         self.presentationClock = sampleClock ?? { clock.presentationSample(atHostTime: $0) }
         self.nextSourceFrame = sampleClock == nil ? { clock.sourceFrameTime(onOrAfter: $0, atHostTime: $1) } : { time, _ in time }
@@ -159,6 +161,7 @@ final class ASSSubtitleSession: ObservableObject {
     func finishLoad() { enabled = true }
 
     func stop() {
+        invalidateSourceFrames()
         enabled = false
         fontRequests = [:]
         fontCache = [:]
@@ -365,12 +368,15 @@ final class ASSSubtitleSession: ObservableObject {
         }
         let epoch = generation
         let worker = renderer
+        // A supplied presentation clock has no decoded-pixel reader/timebase.
+        // Keep its raster-only presentation contract.
+        let pairsVideoFrames = usesEngineClock && (engine.currentAVPlayer != nil || engine.videoRoute == .software)
         let continuous = sampleClock(hostTime)
         var sample = continuous
         var requestedTime = Self.renderTime(engineTime: sourceTime ?? sample.sourceTime,
                                    timelineOffset: timelineOffset, isExternal: track.isExternal,
                                    delaySeconds: delaySeconds)
-        if sourceTime == nil, Self.activeEvents(events, at: requestedTime).contains(where: { $0.isTimeVarying }) {
+        if sourceTime == nil, pairsVideoFrames || Self.activeEvents(events, at: requestedTime).contains(where: { $0.isTimeVarying }) {
             sample = presentationClock(hostTime)
             requestedTime = Self.renderTime(engineTime: sample.sourceTime,
                                            timelineOffset: timelineOffset, isExternal: track.isExternal,
@@ -378,7 +384,7 @@ final class ASSSubtitleSession: ObservableObject {
         }
         guard !usesEngineClock || sample.identity != nil else { return nil }
         let offset = (track.isExternal ? timelineOffset : 0) - delaySeconds
-        if Self.activeEvents(events, at: requestedTime).contains(where: { $0.isTimeVarying }),
+        if pairsVideoFrames || Self.activeEvents(events, at: requestedTime).contains(where: { $0.isTimeVarying }),
            let videoTime = nextSourceFrame(requestedTime - offset, hostTime) {
             // The raster and its queued timestamp must describe the same frame,
             // including a seek target between two decoded video timestamps.
@@ -386,7 +392,7 @@ final class ASSSubtitleSession: ObservableObject {
         }
         guard let time = Self.rendererTime(requestedTime) else { return nil }
         let activeEvents = Self.activeEvents(events, at: time)
-        let varying = activeEvents.contains { $0.isTimeVarying }
+        let varying = pairsVideoFrames || activeEvents.contains { $0.isTimeVarying }
         let validity = Self.validityInterval(events: events, at: time)
         let boundary = varying || !validity.lowerBound.isFinite ? requestedTime : validity.lowerBound
         let alignedSource = nextSourceFrame(boundary - offset, hostTime)

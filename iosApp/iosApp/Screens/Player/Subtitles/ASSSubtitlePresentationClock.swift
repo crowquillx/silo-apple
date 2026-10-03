@@ -257,6 +257,11 @@ final class ASSSubtitlePresentationClock {
         return VideoSnapshot(image: rendered, itemTime: itemTime)
     }
 
+    func videoPixel(atItemTime time: Double) -> CVPixelBuffer? {
+        engine.videoRoute == .software ? engine.softwareVideoFramePixel(at: time)
+            : nativePixels.first(where: { abs($0.key - time) < 0.000001 })?.value
+    }
+
     private func configureNativeOutputs(for item: AVPlayerItem) {
         guard outputItem !== item else { return }
         if let outputItem {
@@ -298,8 +303,13 @@ final class ASSSubtitlePresentationClock {
                 nativeSurfaceTimes.removeValue(forKey: nativeSurfaceOrder.removeFirst())
             }
         }
+        if !engine.isSeeking {
+            let current = sample(atHostTime: CACurrentMediaTime())
+            let itemTime = current.sourceTime - (current.sourceShift ?? 0)
+            if itemTime.isFinite { nativePixels = nativePixels.filter { $0.key >= itemTime - 0.1 } }
+        }
         nativePixels[time] = pixel
-        while nativePixels.count > 6, let first = nativePixels.keys.min() { nativePixels.removeValue(forKey: first) }
+        while nativePixels.count > 32, let first = nativePixels.keys.min() { nativePixels.removeValue(forKey: first) }
         if !nativeFrameTimes.contains(time) {
             nativeFrameTimes.append(time)
             nativeFrameTimes.sort()

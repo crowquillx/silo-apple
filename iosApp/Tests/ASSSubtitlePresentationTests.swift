@@ -1,4 +1,5 @@
 import AetherEngine
+import AVFoundation
 import CoreGraphics
 import CoreMedia
 import Foundation
@@ -404,5 +405,126 @@ final class ASSSubtitlePresentationTests: XCTestCase {
         XCTAssertNotNil(current.frame)
         XCTAssertFalse(current.frame?.image === early.frame?.image)
         XCTAssertTrue(session.present(current, atHostTime: 12, delaySeconds: 0))
+    }
+}
+
+import CoreImage
+import CoreVideo
+
+@MainActor
+final class ASSSubtitleFrameCompositionTests: XCTestCase {
+    private let size = CGSize(width: 64, height: 64)
+    private let linear = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+    private lazy var context = CIContext(options: [.cacheIntermediates: false, .workingColorSpace: linear])
+
+    private func video(format: OSType, hdr: Bool = false) throws -> CVPixelBuffer {
+        var pixel: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 64, 64, format,
+            [kCVPixelBufferIOSurfacePropertiesKey: [:], kCVPixelBufferMetalCompatibilityKey: true] as CFDictionary, &pixel), kCVReturnSuccess)
+        let buffer = try XCTUnwrap(pixel)
+        let transfer = hdr ? kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ : kCVImageBufferTransferFunction_ITU_R_709_2
+        let primaries = hdr ? kCVImageBufferColorPrimaries_ITU_R_2020 : kCVImageBufferColorPrimaries_ITU_R_709_2
+        let matrix = hdr ? kCVImageBufferYCbCrMatrix_ITU_R_2020 : kCVImageBufferYCbCrMatrix_ITU_R_709_2
+        CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, transfer, .shouldPropagate)
+        CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, primaries, .shouldPropagate)
+        CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey, matrix, .shouldPropagate)
+        let color = try XCTUnwrap(CGColor(colorSpace: linear, components: hdr ? [4, 2, 1, 1] : [0.1, 0.2, 0.6, 1]))
+        context.render(CIImage(color: CIColor(cgColor: color)), to: buffer,
+            bounds: CGRect(origin: .zero, size: size), colorSpace: CGColorSpace(name: hdr ? CGColorSpace.itur_2100_PQ : CGColorSpace.itur_709))
+        return buffer
+    }
+
+    private func subtitle() throws -> ASSSubtitleRenderer.Frame {
+        let image = try XCTUnwrap(context.createCGImage(CIImage(color: .white), from: CGRect(x: 0, y: 0, width: 8, height: 8)))
+        return ASSSubtitleRenderer.Frame(image: image, rect: CGRect(x: 8, y: 8, width: 16, height: 12))
+    }
+
+    private func rgba(_ pixel: CVPixelBuffer) -> [Float] {
+        var values = [Float](repeating: 0, count: 64 * 64 * 4)
+        values.withUnsafeMutableBytes {
+            context.render(CIImage(cvPixelBuffer: pixel), toBitmap: $0.baseAddress!, rowBytes: 64 * 4 * MemoryLayout<Float>.size,
+                bounds: CGRect(origin: .zero, size: size), format: .RGBAf, colorSpace: linear)
+        }
+        return values
+    }
+
+    func testEmptyCueKeepsDecodedVideoBuffer() throws {
+        let input = try video(format: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+        XCTAssertTrue(ASSSubtitleFrameCompositor().composite(input, frame: nil, canvasSize: size) === input)
+    }
+
+    func testSDRCompositionPreservesPictureAndPlacesSubtitle() throws {
+        let input = try video(format: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+        let output = try XCTUnwrap(ASSSubtitleFrameCompositor().composite(input, frame: subtitle(), canvasSize: size))
+        XCTAssertEqual(CVPixelBufferGetPixelFormatType(output), CVPixelBufferGetPixelFormatType(input))
+        XCTAssertEqual(CVPixelBufferGetWidth(output), 64)
+        XCTAssertEqual(CVPixelBufferGetHeight(output), 64)
+        let original = rgba(input), actual = rgba(output)
+        for channel in 0..<3 { XCTAssertEqual(actual[(32 * 64 + 32) * 4 + channel], original[(32 * 64 + 32) * 4 + channel], accuracy: 0.02) }
+        for channel in 0..<3 { XCTAssertGreaterThan(actual[(12 * 64 + 12) * 4 + channel], 0.9) }
+        XCTAssertEqual(CVBufferCopyAttachment(output, kCVImageBufferTransferFunctionKey, nil) as? String, kCVImageBufferTransferFunction_ITU_R_709_2 as String)
+    }
+
+    func testHDRCompositionKeepsTenBitPQMetadataAndHighlightValues() throws {
+        let input = try video(format: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange, hdr: true)
+        let output = try XCTUnwrap(ASSSubtitleFrameCompositor().composite(input, frame: subtitle(), canvasSize: size))
+        XCTAssertEqual(CVPixelBufferGetPixelFormatType(output), kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)
+        XCTAssertEqual(CVBufferCopyAttachment(output, kCVImageBufferTransferFunctionKey, nil) as? String, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ as String)
+        XCTAssertEqual(CVBufferCopyAttachment(output, kCVImageBufferColorPrimariesKey, nil) as? String, kCVImageBufferColorPrimaries_ITU_R_2020 as String)
+        let original = rgba(input), actual = rgba(output)
+        let offset = (32 * 64 + 32) * 4
+        XCTAssertGreaterThan(original[offset], 1)
+        for channel in 0..<3 { XCTAssertEqual(actual[offset + channel], original[offset + channel], accuracy: 0.08) }
+    }
+}
+
+
+@MainActor
+final class ASSSubtitleFailureDisplayTests: XCTestCase {
+    func testFontFailureRemovesPairedPictureAndPlaybackContinues() async throws {
+        AetherEngine.setForceSoftwarePathForTesting(true)
+        defer { AetherEngine.setForceSoftwarePathForTesting(false) }
+        let movie = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "authored-no-fonts", withExtension: "mkv"))
+        let controller = try AetherPlaybackController()
+        let spec = try AetherLoadSpec(offlineURL: movie, startPosition: 0, audioOnly: false, panelIsInHDRMode: false)
+        let epoch = controller.beginLoad(spec, shouldPlayWhenReady: false)
+        try await controller.finishLoad(epoch)
+        controller.selectSubtitleTrack(id: 2)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        window.windowLevel = .alert + 1
+        window.rootViewController = UIHostingController(rootView:
+            AetherPlayerSurface(engine: controller.engine)
+                .overlay { ASSSubtitleLayer(session: controller.assSubtitles,
+                    videoRect: CGRect(x: 0, y: 0, width: 320, height: 180), delaySeconds: 0) }
+                .frame(width: 320, height: 180))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil; controller.stop() }
+        controller.play()
+        func layers(_ layer: CALayer) -> [AVSampleBufferDisplayLayer] {
+            (layer as? AVSampleBufferDisplayLayer).map { [$0] } ?? layer.sublayers?.flatMap(layers) ?? []
+        }
+        var paired: AVSampleBufferDisplayLayer?
+        for _ in 0..<150 {
+            paired = layers(window.layer).first { $0.name == "ASSSubtitlePairedVideo" }
+            if let pixel = paired?.sampleBufferRenderer.displayedPixelBuffer(), CVPixelBufferGetWidth(pixel) > 2,
+               controller.engine.clock.sourceTime > 1 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let display = try XCTUnwrap(paired)
+        let visiblePixel = try XCTUnwrap(display.sampleBufferRenderer.displayedPixelBuffer())
+        XCTAssertGreaterThan(CVPixelBufferGetWidth(visiblePixel), 2, "The paired picture must be visible before failing its font request")
+        XCTAssertFalse(display.isHidden)
+        controller.assSubtitles.registerFontRequest(URLRequest(url: URL(fileURLWithPath: "/silo-test/missing-font-bundle.zip")), trackID: 2)
+        for _ in 0..<150 {
+            if controller.assSubtitles.failureMessage != nil, display.isHidden { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNotNil(controller.assSubtitles.failureMessage)
+        XCTAssertTrue(display.isHidden, "A failed subtitle must uncover the engine's moving video")
+        let before = controller.engine.clock.sourceTime
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertGreaterThan(controller.engine.clock.sourceTime, before + 0.25)
     }
 }

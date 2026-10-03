@@ -157,7 +157,7 @@ index 2e136c68..95c456cb 100644
          session = URLSession(
              configuration: config, delegate: EngineTLS.sessionDelegate, delegateQueue: nil)
 diff --git a/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift b/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift
-index 3355796e..2259a891 100644
+index 3355796e..46f2fa74 100644
 --- a/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift
 +++ b/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift
 @@ -22,12 +22,13 @@ public final class HTTPRequestAuthorization: Sendable, Equatable {
@@ -173,7 +173,7 @@ index 3355796e..2259a891 100644
          let relay = HLSOriginRelay(authorization: self,
 -            resourceTimeout: Self.resourceTransferTimeout,
 -            deadline: Date().addingTimeInterval(Self.resourceTransferTimeout))
-+            resourceTimeout: timeout, requestTimeout: timeout,
++            resourceTimeout: timeout, requestTimeout: timeout > Self.resourceTransferTimeout ? timeout : nil,
 +            deadline: Date().addingTimeInterval(timeout))
          defer { relay.stop() }
          return try await relay.fetchData(url, maximumBytes: maximumBytes)

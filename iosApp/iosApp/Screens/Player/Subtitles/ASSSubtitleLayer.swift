@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import CoreImage
 import IOSurface
 import QuartzCore
 import SwiftUI
@@ -191,6 +192,7 @@ private final class ASSSubtitleDisplayDriver: NSObject {
         imageLayer.contentsGravity = .resize
         imageLayer.isHidden = true
         view.subtitleLayer.addSublayer(imageLayer)
+        sampleLayer.name = "ASSSubtitlePairedVideo"
         sampleLayer.isOpaque = false
         sampleLayer.backgroundColor = CGColor(gray: 0, alpha: 0)
         sampleLayer.videoGravity = .resize
@@ -299,6 +301,19 @@ private final class ASSSubtitleDisplayDriver: NSObject {
 
     @objc private func displayTick(_ link: CADisplayLink) {
         guard let session else { return }
+        if session.failureMessage != nil {
+            if !hasClearedFailureDisplay {
+                hasClearedFailureDisplay = true
+                releaseHeldDisplay()
+                invalidatePendingWork()
+                sampleLayer.isHidden = true
+                sampleLayer.sampleBufferRenderer.flush(removingDisplayedImage: true) { }
+                sampleLayerPrimed = false
+                frameCompositor.reset()
+            }
+            return
+        }
+        hasClearedFailureDisplay = false
         let nextDisplay = link.targetTimestamp
         guard nextDisplay.isFinite else { return }
         let nominal = link.duration.isFinite && link.duration > 0 ? link.duration : 1.0 / 60
@@ -468,6 +483,7 @@ private final class ASSSubtitleDisplayDriver: NSObject {
             }
             guard let buffer = sampleBuffer(prepared) else { return false }
             sampleLayer.sampleBufferRenderer.enqueue(buffer)
+            sampleLayer.isHidden = false
             lastEnqueuedBuffer = CMSampleBufferGetImageBuffer(buffer)
             scheduledRasters.removeAll { abs($0.prepared.sourcePresentationTime - prepared.sourcePresentationTime) < 0.000001 }
             scheduledRasters.append(ScheduledRaster(prepared: prepared, canvasSize: videoRect.size))
@@ -567,26 +583,40 @@ private final class ASSSubtitleDisplayDriver: NSObject {
         }
     }
 
+    private let frameCompositor = ASSSubtitleFrameCompositor()
+    private var sampleLayerUsesHDR = false
+    private var hasClearedFailureDisplay = false
+
     private func sampleBuffer(_ prepared: ASSSubtitleSession.PreparedFrame, empty: Bool = false, time: Double? = nil) -> CMSampleBuffer? {
-        let width = Int((videoRect.width * scale).rounded())
-        let height = Int((videoRect.height * scale).rounded())
-        var pixel: CVPixelBuffer?
-        guard width > 0, height > 0,
-            CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
-                [kCVPixelBufferIOSurfacePropertiesKey: [:], kCVPixelBufferCGImageCompatibilityKey: true,
-                 kCVPixelBufferCGBitmapContextCompatibilityKey: true] as CFDictionary, &pixel) == kCVReturnSuccess,
-            let pixel else { return nil }
-        CVPixelBufferLockBaseAddress(pixel, [])
-        defer { CVPixelBufferUnlockBaseAddress(pixel, []) }
-        guard let context = CGContext(data: CVPixelBufferGetBaseAddress(pixel), width: width, height: height,
-              bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixel), space: CGColorSpaceCreateDeviceRGB(),
-              bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue) else { return nil }
-        context.clear(CGRect(x: 0, y: 0, width: width, height: height))
-        if !empty, let frame = prepared.frame {
-            let rect = CGRect(x: frame.rect.minX * scale,
-                              y: CGFloat(height) - frame.rect.maxY * scale,
-                              width: frame.rect.width * scale, height: frame.rect.height * scale)
-            context.draw(frame.image, in: rect)
+        let pixel: CVPixelBuffer
+        if !empty {
+            guard let input = session?.pairedVideoPixel(prepared.sourcePresentationTime),
+                  let paired = frameCompositor.composite(input, frame: prepared.frame, canvasSize: videoRect.size) else { return nil }
+            pixel = paired
+        } else {
+            var clear: CVPixelBuffer?
+            guard CVPixelBufferCreate(kCFAllocatorDefault, 2, 2, kCVPixelFormatType_32BGRA,
+                [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &clear) == kCVReturnSuccess,
+                  let clear else { return nil }
+            CVPixelBufferLockBaseAddress(clear, [])
+            if let bytes = CVPixelBufferGetBaseAddress(clear) { memset(bytes, 0, CVPixelBufferGetDataSize(clear)) }
+            CVPixelBufferUnlockBaseAddress(clear, [])
+            pixel = clear
+        }
+        if !empty {
+            let transfer = CVBufferCopyAttachment(pixel, kCVImageBufferTransferFunctionKey, nil) as? String
+            let hdr = transfer == kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ as String
+                || transfer == kCVImageBufferTransferFunction_ITU_R_2100_HLG as String
+            if hdr != sampleLayerUsesHDR {
+                sampleLayerUsesHDR = hdr
+                if #available(iOS 26, tvOS 26, macOS 26, *) {
+                    sampleLayer.preferredDynamicRange = hdr ? .high : .standard
+                } else {
+                    #if os(iOS) || os(macOS)
+                    sampleLayer.wantsExtendedDynamicRangeContent = hdr
+                    #endif
+                }
+            }
         }
         var format: CMVideoFormatDescription?
         guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
@@ -604,7 +634,9 @@ private final class ASSSubtitleDisplayDriver: NSObject {
     private func show(_ frame: ASSSubtitleRenderer.Frame?) {
         if session?.handlesCurrentTrack != true {
             releaseHeldDisplay()
+            frameCompositor.reset()
             scheduledRasters.removeAll(keepingCapacity: true)
+            sampleLayer.isHidden = true
             sampleLayer.sampleBufferRenderer.flush(removingDisplayedImage: true) { }
             sampleLayerPrimed = false
         }
@@ -632,4 +664,50 @@ private final class ASSSubtitleDisplayDriver: NSObject {
         }
         CATransaction.commit()
     }
+}
+
+/// Compose authored pixels with their exact decoded video frame before enqueue.
+/// The output keeps the source dimensions, pixel format and propagated color metadata.
+@MainActor
+final class ASSSubtitleFrameCompositor {
+    private let compositeContext = CIContext(options: [.cacheIntermediates: false])
+    private var compositePool: CVPixelBufferPool?
+    private var compositeFormat: (width: Int, height: Int, format: OSType)?
+
+    func reset() { compositePool = nil; compositeFormat = nil }
+
+    func composite(_ input: CVPixelBuffer, frame: ASSSubtitleRenderer.Frame?, canvasSize: CGSize) -> CVPixelBuffer? {
+        guard let frame else { return input }
+        guard canvasSize.width > 0, canvasSize.height > 0 else { return nil }
+        let width = CVPixelBufferGetWidth(input)
+        let height = CVPixelBufferGetHeight(input)
+        let format = CVPixelBufferGetPixelFormatType(input)
+        if compositeFormat?.width != width || compositeFormat?.height != height || compositeFormat?.format != format {
+            let attributes: [CFString: Any] = [kCVPixelBufferWidthKey: width, kCVPixelBufferHeightKey: height,
+                kCVPixelBufferPixelFormatTypeKey: format, kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+                kCVPixelBufferMetalCompatibilityKey: true]
+            var pool: CVPixelBufferPool?
+            guard CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attributes as CFDictionary, &pool) == kCVReturnSuccess else { return nil }
+            compositePool = pool
+            compositeFormat = (width, height, format)
+        }
+        guard let compositePool else { return nil }
+        var pixel: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, compositePool, &pixel) == kCVReturnSuccess,
+              let pixel else { return nil }
+        CVBufferRemoveAllAttachments(pixel)
+        CVBufferPropagateAttachments(input, pixel)
+        let base = CIImage(cvPixelBuffer: input)
+        let sx = CGFloat(width) / canvasSize.width
+        let sy = CGFloat(height) / canvasSize.height
+        let overlay = CIImage(cgImage: frame.image).transformed(by: CGAffineTransform(
+            scaleX: frame.rect.width * sx / CGFloat(frame.image.width),
+            y: frame.rect.height * sy / CGFloat(frame.image.height)))
+            .transformed(by: CGAffineTransform(translationX: frame.rect.minX * sx,
+                y: CGFloat(height) - frame.rect.maxY * sy))
+        compositeContext.render(overlay.composited(over: base), to: pixel,
+            bounds: CGRect(x: 0, y: 0, width: width, height: height), colorSpace: base.colorSpace)
+        return pixel
+    }
+
 }

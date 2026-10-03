@@ -37,6 +37,10 @@ private struct OpticalView: View {
     }
 }
 final class ASSSubtitleOpticalCaptureTests: XCTestCase {
+    @MainActor func testExtendedAnimatedLoopback() async throws { try await capture(native: false, animated: true, loopback: true) }
+    @MainActor func testTransportLoopback() async throws { try await capture(native: false, animated: true, transportOnly: true, loopback: true) }
+    @MainActor func testSSASoftware() async throws { try await capture(native: false, short: true, legacySSA: true) }
+    @MainActor func testSSANative() async throws { try await capture(native: true, short: true, legacySSA: true) }
     @MainActor func testTransportSoftware() async throws { try await capture(native: false, animated: true, transportOnly: true) }
     @MainActor func testTransportNative() async throws { try await capture(native: true, animated: true, transportOnly: true) }
     @MainActor func testShortSoftware() async throws { try await capture(native: false, short: true) }
@@ -47,7 +51,9 @@ final class ASSSubtitleOpticalCaptureTests: XCTestCase {
     @MainActor func testExtendedAnimatedNative() async throws { try await capture(native: true, animated: true) }
     @MainActor func testAnimatedSoftware() async throws { try await capture(native: false, short: true, animated: true) }
     @MainActor func testAnimatedNative() async throws { try await capture(native: true, short: true, animated: true) }
-    @MainActor private func capture(native: Bool, short: Bool = false, animated: Bool = false, transportOnly: Bool = false) async throws {
+    @MainActor private func capture(native: Bool, short: Bool = false, animated: Bool = false, transportOnly: Bool = false, legacySSA: Bool = false, loopback: Bool = false) async throws {
+        AetherEngine.setForceSoftwarePathForTesting(!native && !loopback)
+        defer { AetherEngine.setForceSoftwarePathForTesting(false) }
         let controller = try AetherPlaybackController()
         let state = OpticalState()
         #if os(tvOS)
@@ -83,9 +89,9 @@ final class ASSSubtitleOpticalCaptureTests: XCTestCase {
         let epoch = controller.beginLoad(spec, shouldPlayWhenReady: false)
         try await controller.finishLoad(epoch)
         let primary: Int64
-        if native {
-            let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: animated ? "animated" : "sync", withExtension: "ass"))
-            primary = controller.addExternalSubtitleTrack(ExternalSubtitleTrack(url: url, name: "SYNC", language: "eng", formatHint: "ass"), appTrackID: 1000)
+        if (native && !loopback) || legacySSA {
+            let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: animated ? "animated" : "sync", withExtension: legacySSA ? "ssa" : "ass"))
+            primary = controller.addExternalSubtitleTrack(ExternalSubtitleTrack(url: url, name: "SYNC", language: "eng", formatHint: legacySSA ? "ssa" : "ass"), appTrackID: 1000)
         } else { primary = 2 }
         let alt = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "optical-alt", withExtension: "ass"))
         let secondary = controller.addExternalSubtitleTrack(ExternalSubtitleTrack(url: alt, name: "ALT", language: "eng", formatHint: "ass"), appTrackID: 1001)
@@ -95,7 +101,10 @@ final class ASSSubtitleOpticalCaptureTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
         }
         XCTAssertFalse(controller.engine.subtitleCues.isEmpty)
-        XCTAssertEqual(controller.engine.videoRoute.rawValue, native ? "remoteBypass" : "software")
+        if loopback, controller.engine.videoRoute != .loopback {
+            throw XCTSkip("Simulator routed to \(controller.engine.videoRoute.rawValue); native loopback hardware decode is unavailable")
+        }
+        XCTAssertEqual(controller.engine.videoRoute.rawValue, loopback ? "loopback" : native ? "remoteBypass" : "software")
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         window.frame = scene.coordinateSpace.bounds; window.windowLevel = .alert + 1
@@ -110,6 +119,22 @@ final class ASSSubtitleOpticalCaptureTests: XCTestCase {
         func wait(_ seconds: Double) async throws {
             try await Task.sleep(for: .seconds(seconds))
         }
+        func change(_ name: String, operation: () -> Void) async throws {
+            state.stage = "pending"
+            let before = controller.engine.clock.sourceTime
+            let started = Date()
+            print("OPTICAL REQUEST \(name) source=\(before)")
+            operation()
+            for _ in 0..<250 {
+                if controller.engine.state == .playing && controller.engine.clock.sourceTime > before + 0.01 {
+                    print("OPTICAL APPLIED \(name) latency=\(Date().timeIntervalSince(started)) source=\(controller.engine.clock.sourceTime)")
+                    mark(name)
+                    return
+                }
+                try await wait(0.02)
+            }
+            XCTFail("Control did not resume within five seconds: \(name)")
+        }
         mark("onset"); controller.play(); try await wait(12)
         if short { return }
         mark("paused"); controller.pause()
@@ -121,14 +146,14 @@ final class ASSSubtitleOpticalCaptureTests: XCTestCase {
         mark("seek-back"); print("OPTICAL SEEK \(await controller.seek(toSourceTime: 3.25))"); try await wait(1.5)
         mark("seek-repeated"); let _ = await controller.seek(toSourceTime: 10.25); let _ = await controller.seek(toSourceTime: 4.25); try await wait(2)
         if transportOnly { return }
-        state.delay = 0.5; mark("delay-positive"); try await wait(3)
-        state.delay = -0.5; mark("delay-negative"); try await wait(3)
-        state.delay = 0; controller.setSpeed(1.5); mark("speed-1.5"); try await wait(4)
-        controller.setSpeed(0.5); mark("speed-0.5"); try await wait(3)
+        try await change("delay-positive") { state.delay = 0.5 }; try await wait(3)
+        try await change("delay-negative") { state.delay = -0.5 }; try await wait(3)
+        try await change("speed-1.5") { state.delay = 0; controller.setSpeed(1.5) }; try await wait(4)
+        try await change("speed-0.5") { controller.setSpeed(0.5) }; try await wait(3)
         controller.setSpeed(1); controller.selectSubtitleTrack(id: nil); mark("off"); try await wait(1.5)
-        controller.selectSubtitleTrack(id: primary); mark("on"); try await wait(2)
-        controller.selectSubtitleTrack(id: secondary); mark("track-alt"); try await wait(2)
-        controller.selectSubtitleTrack(id: primary); mark("track-sync"); try await wait(2)
+        try await change("on") { controller.selectSubtitleTrack(id: primary) }; try await wait(2)
+        try await change("track-alt") { controller.selectSubtitleTrack(id: secondary) }; try await wait(2)
+        try await change("track-sync") { controller.selectSubtitleTrack(id: primary) }; try await wait(2)
         state.width *= 0.8; mark("resize"); try await wait(2); state.width /= 0.8
         mark("drift-start"); try await wait(28)
         mark("drift-end"); try await wait(6)
