@@ -131,6 +131,22 @@ final class ASSSubtitlePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testStartupRepreparesAfterCueInvalidationDuringDisplayWait() async throws {
+        let clock = TestClock()
+        clock.isAdvancing = false
+        let (controller, session) = try await loadedSession(clock: clock)
+        defer { controller.stop() }
+        session.configureRendering(size: size, scale: 1, delaySeconds: 0)
+        var waits = 0
+        session.waitForDisplay = {
+            waits += 1
+            if waits == 1 { session.invalidatePendingFrames() }
+        }
+        await session.prepareForPlayback()
+        XCTAssertEqual(waits, 2, "Playback must wait for a replacement raster after its first one was invalidated")
+    }
+
+    @MainActor
     private func loadedSession(clock: TestClock) async throws -> (AetherPlaybackController, ASSSubtitleSession) {
         let movie = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "authored", withExtension: "mkv"))
         let controller = try AetherPlaybackController()

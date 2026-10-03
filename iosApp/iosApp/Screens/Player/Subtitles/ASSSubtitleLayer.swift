@@ -591,7 +591,8 @@ private final class ASSSubtitleDisplayDriver: NSObject {
         var format: CMVideoFormatDescription?
         guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
                   imageBuffer: pixel, formatDescriptionOut: &format) == noErr, let format else { return nil }
-        var timing = CMSampleTimingInfo(duration: .invalid,
+        let duration = empty ? CMTime.invalid : session?.decodedFrameDuration(after: prepared) ?? .invalid
+        var timing = CMSampleTimingInfo(duration: duration,
             presentationTimeStamp: CMTime(seconds: time ?? prepared.sourcePresentationTime, preferredTimescale: 1_000_000_000),
             decodeTimeStamp: .invalid)
         var sample: CMSampleBuffer?

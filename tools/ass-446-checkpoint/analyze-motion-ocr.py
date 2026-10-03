@@ -6,7 +6,7 @@ stages=['delay-positive','delay-negative','speed-1.5','speed-0.5','seek-repeated
 for name in sys.argv[1:]:
  p=Path(name); records=list(csv.DictReader((out/(p.stem+'-frames.csv')).open()));i=subprocess.run([ff,'-i',str(p)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True).stderr;w,h=map(int,re.search(r'Video:.*?, (\d{2,5})x(\d{2,5})[ ,]',i).groups());rh=round(h/w*640/2)*2
  proc=subprocess.Popen([ff,'-i',str(p),'-fps_mode','passthrough','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
- rows=[];dest=out/'motion-counters-v2'/p.stem;dest.mkdir(parents=True,exist_ok=True);lastcounter=None;counter=None
+ rows=[];dest=out/'motion-counters-v3'/p.stem;dest.mkdir(parents=True,exist_ok=True);lastcounter=None;counter=None
  for idx,record in enumerate(records):
   raw=proc.stdout.read(w*h*3)
   if len(raw)!=w*h*3: break
@@ -23,11 +23,20 @@ for name in sys.argv[1:]:
   if lastcounter is None or changed(burned,lastcounter[0]) or changed(originalHeader,lastcounter[1]):
    counter=dest/f'{idx:05d}.png'
    canvas=Image.new('RGB',(2400,460));canvas.paste(Image.fromarray(burned).resize((2400,280)),(0,0));canvas.paste(Image.fromarray(originalHeader).resize((1920,160)),(0,300));canvas.save(counter);lastcounter=(burned.copy(),originalHeader.copy())
-  white=b[130:225].min(2)>190;xx=np.where(white.sum(0)>4)[0];pos=float(xx.min()*2) if len(xx) else None
+  # Detect the thin outline from original capture pixels. A double downsample
+  # can erase its left edge at resize and accidentally measure the right edge.
+  fullVideo=np.array(Image.fromarray(full[fy0:fy1,fx0:fx1]).resize((1280,720)))
+  white=fullVideo[260:450].min(2)>190;xx=np.where(white.sum(0)>8)[0];pos=float(xx.min()) if len(xx) else None
   rows.append({'capture_frame':idx,'capture_time_s':record['capture_time_s'],'counter':counter.name,'observed_left_source_pixels':pos})
  proc.wait()
- ocr=json.loads(subprocess.check_output([str(out/'ocr-frames')]+list(map(str,dest.glob('*.png')))))
- (out/(p.stem+'-motion-ocr.json')).write_text(json.dumps(ocr,indent=2))
+ ocrPath=out/(p.stem+'-motion-ocr.json')
+ # Counter extraction is unchanged between v2 and v3; v3 changes only outline
+ # measurement. Reuse matching original-resolution counter OCR when present.
+ ocr=json.loads(ocrPath.read_text()) if ocrPath.exists() else {}
+ required={row['counter'] for row in rows}
+ if not required.issubset(ocr):
+  ocr=json.loads(subprocess.check_output([str(out/'ocr-frames-parallel')]+list(map(str,dest.glob('*.png')))))
+  ocrPath.write_text(json.dumps(ocr,indent=2))
  laststage=''; previousSource=None; resolvedCounters={}
  for row in rows:
   text=' '.join(ocr.get(row['counter'],[]));m=re.search(r'(?:F[R]?A[MUV][E]?|FRAME|IFRAME)\s*(\d+)',text,re.I);source=int(m[1]) if m else None

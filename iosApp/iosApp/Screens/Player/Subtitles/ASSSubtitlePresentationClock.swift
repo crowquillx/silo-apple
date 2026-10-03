@@ -79,8 +79,10 @@ final class ASSSubtitlePresentationClock {
     private let softwareFrames = SoftwareFrames()
     private weak var outputItem: AVPlayerItem?
     private var videoOutput: AVPlayerItemVideoOutput?
+    private var lookaheadOutput: AVPlayerItemVideoOutput?
     private var nativeFrameTimes: [Double] = []
     private var nativePixels: [Double: CVPixelBuffer] = [:]
+    private var liveNativeFrame: (time: Double, pixel: CVPixelBuffer)?
     private let imageContext = CIContext(options: [.cacheIntermediates: false])
     private var clockKey: ClockKey?
     private var clockIdentity = UUID()
@@ -95,6 +97,27 @@ final class ASSSubtitlePresentationClock {
         softwareFrames.invalidate()
         nativeFrameTimes.removeAll(keepingCapacity: true)
         nativePixels.removeAll(keepingCapacity: true)
+        liveNativeFrame = nil
+        resetLookahead()
+    }
+
+    /// A static cut may have acquired a frame beyond a resumed animated track.
+    /// Reset that reader while retaining the current reader's exact frame.
+    func resetLookahead() {
+        guard let item = outputItem else { return }
+        if let lookaheadOutput { item.remove(lookaheadOutput) }
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ])
+        item.add(output)
+        lookaheadOutput = output
+        if let liveNativeFrame {
+            nativeFrameTimes = [liveNativeFrame.time]
+            nativePixels = [liveNativeFrame.time: liveNativeFrame.pixel]
+        } else {
+            nativeFrameTimes.removeAll(keepingCapacity: true)
+            nativePixels.removeAll(keepingCapacity: true)
+        }
     }
 
     /// Render the cue at the timestamp of the video frame, rather than between frames.
@@ -114,24 +137,18 @@ final class ASSSubtitlePresentationClock {
                 ?? softwareFrames.time(onOrAfter: sample.sourceTime)
         case .loopback, .remoteBypass:
             guard let item = engine.currentAVPlayer?.currentItem else { return sample }
-            if outputItem !== item {
-                if let outputItem, let videoOutput { outputItem.remove(videoOutput) }
-                let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
-                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-                ])
-                item.add(output)
-                outputItem = item
-                videoOutput = output
-                nativeFrameTimes = []
-                nativePixels = [:]
-            }
-            if let videoOutput {
+            configureNativeOutputs(for: item)
+            // Each output tracks acquired frames. Future warming must not mark
+            // the live output acquired past the frame AVPlayer currently shows.
+            let output = hostTime > CACurrentMediaTime() + 0.001 ? lookaheadOutput : videoOutput
+            if let output {
                 let time = CMTime(seconds: sample.sourceTime - (sample.sourceShift ?? 0), preferredTimescale: 1_000_000_000)
                 var displayed = CMTime.invalid
-                if videoOutput.hasNewPixelBuffer(forItemTime: time),
-                   let pixel = videoOutput.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayed),
+                if output.hasNewPixelBuffer(forItemTime: time),
+                   let pixel = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayed),
                    displayed.isNumeric, displayed.seconds.isFinite {
                     recordNativeFrame(displayed.seconds, pixel: pixel)
+                    if output === videoOutput { liveNativeFrame = (displayed.seconds, pixel) }
                 }
             }
             let shift = sample.sourceShift ?? 0
@@ -157,10 +174,12 @@ final class ASSSubtitlePresentationClock {
             return softwareFrames.time(onOrAfter: sourceTime)
         case .loopback, .remoteBypass:
             guard !engine.isSeeking else { return nil }
-            let sample = presentationSample(atHostTime: hostTime)
+            guard let item = engine.currentAVPlayer?.currentItem else { return nil }
+            configureNativeOutputs(for: item)
+            let sample = sample(atHostTime: hostTime)
             let shift = sample.sourceShift ?? 0
             if nativeFrameTimes.first(where: { $0 + shift >= sourceTime - 0.000001 }) == nil,
-               let videoOutput {
+               let videoOutput = lookaheadOutput {
                 // Ask for decoded future frames, without assuming a constant frame rate.
                 for lead in [0.0, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128] {
                     let requested = CMTime(seconds: sourceTime - shift + lead, preferredTimescale: 1_000_000_000)
@@ -191,10 +210,9 @@ final class ASSSubtitlePresentationClock {
         let itemTime: Double
         switch engine.videoRoute {
         case .software:
-            pixel = engine.softwarePiPSource?.layer.sampleBufferRenderer.displayedPixelBuffer()
-            guard let pixel, let metadata = CVBufferCopyAttachment(pixel, "AetherSoftwareFrameTime" as CFString, nil)
-                as? [String: NSNumber], let pts = metadata["pts"] else { return nil }
-            itemTime = pts.doubleValue
+            guard let displayed = engine.softwareDisplayedVideoFrame else { return nil }
+            pixel = displayed.pixelBuffer
+            itemTime = displayed.time.presentation.seconds
         case .loopback, .remoteBypass:
             let sample = presentationSample(atHostTime: CACurrentMediaTime())
             let time = CMTime(seconds: sample.sourceTime - (sample.sourceShift ?? 0), preferredTimescale: 1_000_000_000)
@@ -214,6 +232,25 @@ final class ASSSubtitlePresentationClock {
         let image = CIImage(cvPixelBuffer: pixel)
         guard itemTime.isFinite, let rendered = imageContext.createCGImage(image, from: image.extent) else { return nil }
         return VideoSnapshot(image: rendered, itemTime: itemTime)
+    }
+
+    private func configureNativeOutputs(for item: AVPlayerItem) {
+        guard outputItem !== item else { return }
+        if let outputItem {
+            if let videoOutput { outputItem.remove(videoOutput) }
+            if let lookaheadOutput { outputItem.remove(lookaheadOutput) }
+        }
+        let attributes: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        let live = AVPlayerItemVideoOutput(pixelBufferAttributes: attributes)
+        let future = AVPlayerItemVideoOutput(pixelBufferAttributes: attributes)
+        item.add(live)
+        item.add(future)
+        outputItem = item
+        videoOutput = live
+        lookaheadOutput = future
+        liveNativeFrame = nil
+        nativeFrameTimes.removeAll(keepingCapacity: true)
+        nativePixels.removeAll(keepingCapacity: true)
     }
 
     private func recordNativeFrame(_ time: Double, pixel: CVPixelBuffer) {

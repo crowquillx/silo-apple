@@ -17,7 +17,7 @@ for name in sys.argv[1:]:
   if last is None or np.count_nonzero(mask!=last[0])>2 or tag.shape!=last[1].shape or np.count_nonzero(tag!=last[1])>2:
    counter=dest/f'{idx:05d}.png';canvas=Image.new('RGB',(1520,350));canvas.paste(Image.fromarray(b[:50,:380]).resize((1520,200)),(0,0));canvas.paste(Image.fromarray(header).resize((1280,120)),(0,220));canvas.save(counter);last=(mask,tag)
   rows.append(dict(record,counter=counter.name))
- proc.wait();ocr=json.loads(subprocess.check_output([str(out/'ocr-frames')]+list(map(str,dest.glob('*.png')))));(out/(p.stem+'-timing-ocr.json')).write_text(json.dumps(ocr,indent=2));laststage='';isSoftware='software' in p.name
+ proc.wait();ocr=json.loads(subprocess.check_output([str(out/'ocr-frames-parallel')]+list(map(str,dest.glob('*.png')))));(out/(p.stem+'-timing-ocr.json')).write_text(json.dumps(ocr,indent=2));laststage='';isSoftware='software' in p.name
  for row in rows:
   text=' '.join(ocr.get(row['counter'],[]));m=re.search(r'(?:F[R]?A[MUV][E]?|FRAME|IFRAME)\s*(\d+)',text,re.I);source=int(m[1]) if m else None
   originalSource=source

@@ -362,8 +362,14 @@ final class AetherPlaybackController {
         // must keep a paused mount parked while subtitles are being prepared.
         let keepPaused = !shouldPlayWhenReady || transportRestoreTask != nil
             || engine.state == .loading || engine.state == .paused
+        let preparesAuthoredTrack = !keepPaused && hasCommittedActiveLoad && assSubtitles.handlesCurrentTrack
+        if preparesAuthoredTrack {
+            engine.pause()
+            assSubtitles.holdPresentation()
+        }
         engine.setRate(rate)
-        if keepPaused { engine.pause() }
+        if keepPaused || preparesAuthoredTrack { engine.pause() }
+        if preparesAuthoredTrack { play() }
     }
 
     private func refreshSubtitleTiming() {
