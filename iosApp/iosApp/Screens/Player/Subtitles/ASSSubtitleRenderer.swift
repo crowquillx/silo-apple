@@ -12,6 +12,17 @@ actor ASSSubtitleRenderer {
         let start: Double
         let end: Double
 
+        /// A static raster stays correct for the entire active-event interval.
+        /// Animated overrides and legacy scrolling effects need fresh samples.
+        var isTimeVarying: Bool {
+            let fields = text.split(separator: ",", maxSplits: 8, omittingEmptySubsequences: false)
+            if fields.count == 9, !fields[7].isEmpty { return true }
+            let overrides = text.lowercased()
+            return ["\\k", "\\t(", "\\move(", "\\fad(", "\\fade("].contains {
+                overrides.contains($0)
+            }
+        }
+
         static func events(from cues: [SubtitleCue]) -> [Event] {
             cues.flatMap { cue -> [Event] in
                 guard case .text(let raw) = cue.body,
@@ -129,7 +140,8 @@ actor ASSSubtitleRenderer {
                 let length = Int32(bytes.count - 1)
                 bytes.withUnsafeMutableBufferPointer {
                     ass_process_chunk(renderer.track, $0.baseAddress, length,
-                                      Int64(start * 1_000), Int64(duration * 1_000))
+                                      Int64((start * 1_000).rounded()),
+                                      Int64((event.end * 1_000).rounded()) - Int64((start * 1_000).rounded()))
                 }
                 events.insert(event)
             }

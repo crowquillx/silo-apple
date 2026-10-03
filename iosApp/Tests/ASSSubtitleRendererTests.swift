@@ -36,6 +36,22 @@ final class ASSSubtitleRendererTests: XCTestCase {
         XCTAssertEqual(pixel(duplicate, x: 25, y: 35).r, pixel(frame, x: 25, y: 35).r)
     }
 
+    func testAdjacentMillisecondCuesHaveNoFloatingPointGap() async throws {
+        let renderer = ASSSubtitleRenderer()
+        let events = [
+            ASSSubtitleRenderer.Event(text: drawing(x: 20, y: 30), start: 3.021, end: 4.021),
+            ASSSubtitleRenderer.Event(text: drawing(x: 140, y: 90, color: "00FF00"), start: 4.021, end: 5.021),
+        ]
+        let closing = try await renderer.render(header: header, fonts: [], events: events,
+                                               revision: 1, time: 4.0201, size: size, scale: 1)
+        XCTAssertGreaterThan(pixel(closing, x: 25, y: 35).r, 200,
+                             "The last millisecond of the outgoing cue must remain visible")
+        let opening = try await renderer.render(header: header, fonts: [], events: events,
+                                               revision: 1, time: 4.0211, size: size, scale: 1)
+        XCTAssertEqual(pixel(opening, x: 25, y: 35).a, 0)
+        XCTAssertGreaterThan(pixel(opening, x: 145, y: 95).g, 200)
+    }
+
     func testAnimationAndBackwardSeekUseRequestedTime() async throws {
         let renderer = ASSSubtitleRenderer()
         let event = ASSSubtitleRenderer.Event(
