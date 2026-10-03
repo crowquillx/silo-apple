@@ -1,6 +1,6 @@
 # Issue 446 recovery checkpoint
 
-The branch is rebased onto upstream main `c5ae80fc04d8e23be55c6fcd28ec8b5859158ee6`. The Apple renderer now pairs each ASS/SSA raster with its exact decoded video frame and queues one composed pixel buffer on the playback timebase. This removes the separate-layer phase errors preserved in the earlier checkpoints. AVPlayer still supplies native decoding, audio and the clock on native routes; its original AVPlayerLayer is covered by the paired display while authored subtitles are selected.
+The branch is rebased onto upstream main `8be2542dede46a7ae2cbc89777cda002b3f92c42`. The Apple renderer now pairs each ASS/SSA raster with its exact decoded video frame and queues one composed pixel buffer on the playback timebase. This removes the separate-layer phase errors preserved in the earlier checkpoints. AVPlayer still supplies native decoding, audio and the clock on native routes; its original AVPlayerLayer is covered by the paired display while authored subtitles are selected.
 
 ## Required dependency patch
 
