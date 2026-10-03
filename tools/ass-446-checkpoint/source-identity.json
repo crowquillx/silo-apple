@@ -1,21 +1,26 @@
 {
-  "apple_base": "33edbe927dffa739451538dde42eb959aca0b338",
+  "apple_base": "152b3162d1c4753f60a1f7d08ae5e510f03d25a8",
   "aether_base": "ec969b734548d09f8324dc18645050cdc94d3018",
   "apple_sources": {
     "iosApp/Tests/ASSSubtitlePresentationTests.swift": "e0dbb39d88069bb2c272bff37e20042b29cc29dc9e0117c87a9c82bd6928ab57",
-    "iosApp/Tests/ASSSubtitleRendererTests.swift": "cc45143574d5b3832b1c07c32bd79f8d685fec6099b911be9c1281dfe0a2a585",
+    "iosApp/Tests/ASSSubtitleRendererTests.swift": "74f33f663d799ec171f2f06c39dc4ed0b9b4c9911eb710adcfcb36c376bf2920",
     "iosApp/Tests/Fixtures/ASS/README.md": "849b5c6b279a44e8901f07f827f7b833888a3d716d1a4a2386b94fe74a3f87f5",
     "iosApp/Tests/Fixtures/ASS/authored-no-fonts.mkv": "9bfd770f52104d253cf1ad526ba1023547feb7527e921d2a2bec6c8fc9a3751c",
     "iosApp/iosApp/Screens/Player/AetherPlaybackController.swift": "18d62e998b7d45be1d21d1ab47a857a96f42df054e1a085098338ba08ca13146",
     "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleLayer.swift": "7b8679319b855f19916ea599842114c3b5597f26f9978bb8cfbe299aeef24c62",
-    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitlePresentationClock.swift": "27d2ba0ee8cc523b3d160e95b4ac6b6fc9fc2eb932f6d8604f25a8eedaf96a2a",
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitlePresentationClock.swift": "f82b4159ce2ecabc12920c1ecc1530f4195db1cdea8a038777b55ea12e7944e0",
     "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleRenderer.swift": "877a7b0922b6746821ccee56579917b9e0c23ccf2b64760ff21009a3e44dd16a",
-    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleSession.swift": "51022e55b3965d3806f169e4c4c58041ce7ef6b8e3c3161ce0459d338eed72fe"
+    "iosApp/iosApp/Screens/Player/Subtitles/ASSSubtitleSession.swift": "44af2b299af2374c12174ec15683fbc518c06695405c767eba1a6731138966de",
+    "tools/ass-446-checkpoint/ASSSubtitleOpticalCaptureTests.swift": "b6b8621f820c2b15b11d4e51131c50641ce65180d266e9387fe7114bd69b91aa",
+    "tools/ass-446-checkpoint/OpticalMacHarness.swift": "3d71a6e627d16f393550261dbbc2527249d61ee2ad78e2e03d970f64f7294028",
+    "tools/ass-446-checkpoint/ocr-frames-parallel.swift": "63390212eebe180df548f06b84c28468a2c2912eaa7d3e0666c36a352e0da063",
+    "tools/ass-446-checkpoint/ocr-frames.swift": "5557a0a9cfc96e3712a425cb9c48fab6a32018a693362438c29869eb5072cc33"
   },
   "aether_sources": {
     "Sources/AetherEngine/AetherEngine.swift": "2a2385c212a52fb3b97ef3f120b727188acae8e9a15bbcbf05481106b37daf27",
-    "Sources/AetherEngine/Native/SoftwarePlaybackHost.swift": "0f896e0eb5e03a7e1c1378bdd757f6e007192f05131a8e7218c79c71a31bd388",
-    "Sources/AetherEngine/Network/HTTPRequestAuthorization.swift": "2092d08c44cd8709a4c3aa9d377a0688cc25d1146a1b72cf4a16645a1d11e6ac",
+    "Sources/AetherEngine/Native/SoftwarePlaybackHost.swift": "ac6f410248c761bc3ac3688a5ee07fe40bb4931934c108376d5d0239da86ac66",
+    "Sources/AetherEngine/Network/HLSOriginRelay.swift": "b5a61cc5d6374029ee5e9cabb97bd116c0347c7cc68cf2cec073546f64e05636",
+    "Sources/AetherEngine/Network/HTTPRequestAuthorization.swift": "67bcb2cd6f8ca05be82573a3c64fba7eacf47daeaf21aee9dcf5ff352351ac8d",
     "Sources/AetherEngine/Renderer/SampleBufferRenderer.swift": "02dc5aff98b127b1de8243856f85238ef222979a616aacc017915d490b792c56"
   },
   "toolchain": "Xcode 27.0\nBuild version 27A266a",

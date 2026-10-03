@@ -20,10 +20,49 @@ index b2adb8b6..aac0caed 100644
      /// pixel aspect ratio the decoder attached. nil on every other path, before the first frame is
      /// built, and on sources with no video.
 diff --git a/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift b/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift
-index c45c3986..a5ad8052 100644
+index c45c3986..1e69a380 100644
 --- a/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift
 +++ b/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift
-@@ -285,6 +285,10 @@ final class SoftwarePlaybackHost {
+@@ -164,9 +164,29 @@ final class SoftwarePlaybackHost {
+     /// is in (`PausedFirstFrame`). Set by `pause()`, cleared by `play()`, `stop()` and that frame.
+     nonisolated private var pausedBeforeFirstFrame: Bool {
+         get { flagsLock.lock(); defer { flagsLock.unlock() }; return _pausedBeforeFirstFrame }
+-        set { flagsLock.lock(); _pausedBeforeFirstFrame = newValue; flagsLock.unlock() }
++        set { flagsLock.lock(); _pausedBeforeFirstFrame = newValue; pausedPrerollAnchor = nil; flagsLock.unlock() }
+     }
+     nonisolated(unsafe) private var _pausedBeforeFirstFrame = false
++    nonisolated(unsafe) private var pausedPrerollAnchor: Double?
++
++    nonisolated private var pausedPrerollNeedsFirstFrame: Bool {
++        flagsLock.lock(); defer { flagsLock.unlock() }
++        return _pausedBeforeFirstFrame && pausedPrerollAnchor == nil
++    }
++
++    /// Park on the first admitted frame, then queue a bounded video lead before
++    /// the demux loop sleeps. Resume must not advance captions ahead of video
++    /// while the decoder refills an empty post-seek queue.
++    nonisolated private func admitPausedPreroll(pts: Double) -> Double? {
++        flagsLock.lock(); defer { flagsLock.unlock() }
++        guard _pausedBeforeFirstFrame else { return nil }
++        if let anchor = pausedPrerollAnchor {
++            if pts - anchor >= 0.25 { _pausedBeforeFirstFrame = false }
++            return nil
++        }
++        pausedPrerollAnchor = pts
++        return pts
++    }
+ 
+     /// Clears the flag and says whether it was set, in one step, so the first frame and a `play()` cannot
+     /// both act on it.
+@@ -174,6 +194,7 @@ final class SoftwarePlaybackHost {
+         flagsLock.lock(); defer { flagsLock.unlock() }
+         let was = _pausedBeforeFirstFrame
+         _pausedBeforeFirstFrame = false
++        pausedPrerollAnchor = nil
+         return was
+     }
+ 
+@@ -285,6 +306,10 @@ final class SoftwarePlaybackHost {
          renderer.setFrameEnqueuedObserver(observer)
      }
  
@@ -34,16 +73,17 @@ index c45c3986..a5ad8052 100644
      /// #303: the renderer's own view of what reached the display. Async because the AVFoundation
      /// accessor is; the memprobe already runs in an async context, so it is read there rather than
      /// cached, and the line never carries a stale snapshot.
-@@ -823,15 +827,17 @@ final class SoftwarePlaybackHost {
+@@ -823,15 +848,18 @@ final class SoftwarePlaybackHost {
              guard self.decodeGeneration == self.seekGeneration else { return }
              // Decoder callback is off-main; SampleBufferRenderer is internally locked.
              self.renderer.enqueue(pixelBuffer: pixelBuffer, pts: pts, hdr10PlusData: hdr10PlusData)
 +            // A paused mount or seek must show its first admitted frame. Keep
 +            // reading through preroll, then drain the reorder buffer before parking.
 +            if self.pausedBeforeFirstFrame {
-+                self.renderer.drainReorderBuffer()
-+                if let handed = self.renderer.newestEnqueuedPtsSeconds, self.takePausedBeforeFirstFrame() {
-+                    self.presentFirstFrameUnderPause(pts: handed, generation: self.decodeGeneration)
++                if self.pausedPrerollNeedsFirstFrame { self.renderer.drainReorderBuffer() }
++                if let handed = self.renderer.newestEnqueuedPtsSeconds,
++                   let anchor = self.admitPausedPreroll(pts: handed) {
++                    self.presentFirstFrameUnderPause(pts: anchor, generation: self.decodeGeneration)
 +                }
 +            }
              // First-frame milestone: demux reached a video packet + decoder produced a pixel buffer.
@@ -58,7 +98,7 @@ index c45c3986..a5ad8052 100644
                  let pfType = CVPixelBufferGetPixelFormatType(pixelBuffer)
                  EngineLog.emit(
                      "[SWHost] first video frame enqueued: "
-@@ -1365,9 +1371,15 @@ final class SoftwarePlaybackHost {
+@@ -1365,9 +1393,15 @@ final class SoftwarePlaybackHost {
              // Paused seek: anchor at target with rate 0 so play() resumes from the seek position (without this, scrubs freeze or drop all samples).
              audioOutput?.seekClock(to: targetTime, rate: 0)
              pausedByHost = true
@@ -74,8 +114,30 @@ index c45c3986..a5ad8052 100644
          // The source stands at the target and the clock is anchored on it: everything the loop
          // reads from here belongs to this position. Closing the window releases the loop.
          noteSeekSettled(generation)
+diff --git a/Sources/AetherEngine/Network/HLSOriginRelay.swift b/Sources/AetherEngine/Network/HLSOriginRelay.swift
+index 2e136c68..95c456cb 100644
+--- a/Sources/AetherEngine/Network/HLSOriginRelay.swift
++++ b/Sources/AetherEngine/Network/HLSOriginRelay.swift
+@@ -75,7 +75,7 @@ final class HLSOriginRelay: @unchecked Sendable {
+     private var pumps: [UUID: UpstreamPump] = [:]
+ 
+     init(authorization: HTTPRequestAuthorization? = nil, authorizationTimeout: TimeInterval = 10,
+-         resourceTimeout: TimeInterval = 120, deadline: Date? = nil, rawResources: Bool = false,
++         resourceTimeout: TimeInterval = 120, requestTimeout: TimeInterval? = nil, deadline: Date? = nil, rawResources: Bool = false,
+          onRequestFailure: (@Sendable () -> Void)? = nil) {
+         self.rawResources = rawResources
+         self.onRequestFailure = onRequestFailure
+@@ -90,7 +90,7 @@ final class HLSOriginRelay: @unchecked Sendable {
+             config.httpCookieStorage = nil
+             config.urlCredentialStorage = nil
+         }
+-        config.timeoutIntervalForRequest = min(30, resourceTimeout / 2)
++        config.timeoutIntervalForRequest = min(requestTimeout ?? min(30, resourceTimeout / 2), resourceTimeout)
+         config.timeoutIntervalForResource = resourceTimeout
+         session = URLSession(
+             configuration: config, delegate: EngineTLS.sessionDelegate, delegateQueue: nil)
 diff --git a/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift b/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift
-index 3355796e..082b6ac8 100644
+index 3355796e..2259a891 100644
 --- a/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift
 +++ b/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift
 @@ -22,12 +22,13 @@ public final class HTTPRequestAuthorization: Sendable, Equatable {
@@ -91,7 +153,7 @@ index 3355796e..082b6ac8 100644
          let relay = HLSOriginRelay(authorization: self,
 -            resourceTimeout: Self.resourceTransferTimeout,
 -            deadline: Date().addingTimeInterval(Self.resourceTransferTimeout))
-+            resourceTimeout: timeout,
++            resourceTimeout: timeout, requestTimeout: timeout,
 +            deadline: Date().addingTimeInterval(timeout))
          defer { relay.stop() }
          return try await relay.fetchData(url, maximumBytes: maximumBytes)

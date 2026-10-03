@@ -52,6 +52,33 @@ final class ASSSubtitleRendererTests: XCTestCase {
         XCTAssertGreaterThan(pixel(opening, x: 145, y: 95).g, 200)
     }
 
+    func testLegacySSAStyleAndAdjacentEventsRenderAtTheirSourceTimes() async throws {
+        let legacyHeader = """
+        [Script Info]
+        ScriptType: v4.00
+        PlayResX: 320
+        PlayResY: 180
+        [V4 Styles]
+        Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, TertiaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, AlphaLevel, Encoding
+        Style: Default,Helvetica,40,255,65280,0,0,0,0,1,0,0,5,0,0,0,0,1
+        """
+        let events = [
+            ASSSubtitleRenderer.Event(text: drawing(x: 20, y: 30), start: 2.021, end: 3.021),
+            ASSSubtitleRenderer.Event(text: drawing(x: 140, y: 90, color: "00FF00"), start: 3.021, end: 4.021),
+        ]
+        let renderer = ASSSubtitleRenderer()
+        let before = try await renderer.render(header: legacyHeader, fonts: [], events: events,
+                                              revision: 1, time: 2.020, size: size, scale: 1)
+        XCTAssertNil(before)
+        let first = try await renderer.render(header: legacyHeader, fonts: [], events: events,
+                                             revision: 1, time: 2.021, size: size, scale: 1)
+        XCTAssertGreaterThan(pixel(first, x: 25, y: 35).r, 200)
+        let next = try await renderer.render(header: legacyHeader, fonts: [], events: events,
+                                            revision: 1, time: 3.021, size: size, scale: 1)
+        XCTAssertEqual(pixel(next, x: 25, y: 35).a, 0)
+        XCTAssertGreaterThan(pixel(next, x: 145, y: 95).g, 200)
+    }
+
     func testAnimationAndBackwardSeekUseRequestedTime() async throws {
         let renderer = ASSSubtitleRenderer()
         let event = ASSSubtitleRenderer.Event(
