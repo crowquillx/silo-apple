@@ -1,0 +1,30 @@
+[Script Info]
+Title: Silo ASS outline and fill timing test
+ScriptType: v4.00+
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+PlayResX: 1280
+PlayResY: 720
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,DejaVu Sans,220,&H00AA6917,&H00000000,&H00FFFFFF,&H00000000,1,0,0,0,100,100,0,0,1,12,0,5,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:02.02,0:00:03.02,Default,,0,0,0,,{\1c&H002A5BEA&}SYNC
+Dialogue: 0,0:00:03.02,0:00:04.02,Default,,0,0,0,,{\1c&H00AA6917&}SYNC
+Dialogue: 0,0:00:04.02,0:00:05.02,Default,,0,0,0,,{\1c&H002A5BEA&}SYNC
+Dialogue: 0,0:00:05.02,0:00:06.02,Default,,0,0,0,,{\1c&H00AA6917&}SYNC
+Dialogue: 0,0:00:06.02,0:00:07.02,Default,,0,0,0,,{\1c&H002A5BEA&}SYNC
+Dialogue: 0,0:00:07.02,0:00:08.02,Default,,0,0,0,,{\1c&H00AA6917&}SYNC
+Dialogue: 0,0:00:08.02,0:00:09.02,Default,,0,0,0,,{\1c&H002A5BEA&}SYNC
+Dialogue: 0,0:00:09.02,0:00:10.02,Default,,0,0,0,,{\1c&H00AA6917&}SYNC
+Dialogue: 0,0:00:10.02,0:00:11.02,Default,,0,0,0,,{\1c&H002A5BEA&}SYNC
+Dialogue: 0,0:00:11.02,0:00:12.02,Default,,0,0,0,,{\1c&H00AA6917&}SYNC
+Dialogue: 0,0:00:12.02,0:00:13.02,Default,,0,0,0,,{\1c&H002A5BEA&}SYNC
+Dialogue: 0,0:00:13.02,0:00:14.02,Default,,0,0,0,,{\1c&H00AA6917&}SYNC
+Dialogue: 0,0:00:14.02,0:00:15.02,Default,,0,0,0,,{\1c&H002A5BEA&}SYNC
+Dialogue: 0,0:00:15.02,0:00:16.02,Default,,0,0,0,,{\1c&H00AA6917&}SYNC
+Dialogue: 0,0:00:16.02,0:00:17.02,Default,,0,0,0,,{\1c&H002A5BEA&}SYNC
+Dialogue: 0,0:00:17.02,0:00:18.02,Default,,0,0,0,,{\1c&H00AA6917&}SYNC

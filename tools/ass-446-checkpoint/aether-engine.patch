@@ -1,0 +1,102 @@
+diff --git a/Sources/AetherEngine/AetherEngine.swift b/Sources/AetherEngine/AetherEngine.swift
+index b2adb8b6..fa463bc6 100644
+--- a/Sources/AetherEngine/AetherEngine.swift
++++ b/Sources/AetherEngine/AetherEngine.swift
+@@ -837,6 +837,17 @@ public final class AetherEngine: ObservableObject {
+     /// display layer, nil on teardown. Hosts build their sample-buffer PiP ContentSource from it.
+     @Published public internal(set) var softwarePiPSource: SoftwarePiPSource?
+ 
++    /// Timestamp and generation of the software frame currently held by the
++    /// display, including a pause between presentation refreshes. Read-only.
++    public var softwareDisplayedVideoFrameTime: SoftwareVideoFrameTime? {
++        guard let pixel = softwarePiPSource?.layer.sampleBufferRenderer.displayedPixelBuffer(),
++              let value = CVBufferCopyAttachment(pixel, "AetherSoftwareFrameTime" as CFString, nil)
++                as? [String: NSNumber], let pts = value["pts"], let generation = value["generation"],
++              pts.doubleValue.isFinite else { return nil }
++        return SoftwareVideoFrameTime(presentation: CMTime(seconds: pts.doubleValue, preferredTimescale: 1_000_000_000),
++                                      generation: generation.uint64Value)
++    }
++
+     /// #353: the size the software path's picture presents at, in pixels: the coded frame under the
+     /// pixel aspect ratio the decoder attached. nil on every other path, before the first frame is
+     /// built, and on sources with no video.
+diff --git a/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift b/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift
+index c45c3986..c28de795 100644
+--- a/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift
++++ b/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift
+@@ -823,15 +823,17 @@ final class SoftwarePlaybackHost {
+             guard self.decodeGeneration == self.seekGeneration else { return }
+             // Decoder callback is off-main; SampleBufferRenderer is internally locked.
+             self.renderer.enqueue(pixelBuffer: pixelBuffer, pts: pts, hdr10PlusData: hdr10PlusData)
++            // A paused mount or seek must show its first admitted frame. Keep
++            // reading through preroll, then drain the reorder buffer before parking.
++            if self.pausedBeforeFirstFrame {
++                self.renderer.drainReorderBuffer()
++                if let handed = self.renderer.newestEnqueuedPtsSeconds, self.takePausedBeforeFirstFrame() {
++                    self.presentFirstFrameUnderPause(pts: handed, generation: self.decodeGeneration)
++                }
++            }
+             // First-frame milestone: demux reached a video packet + decoder produced a pixel buffer.
+             if self.bumpFramesEnqueued() == 0 {
+                 self.noteFirstFrameEnqueuedForDisplayFallback()
+-                if self.takePausedBeforeFirstFrame() {
+-                    // The reorder buffer holds four frames before it hands one to the layer, and the
+-                    // loops park again from here: without the drain the frame never leaves it.
+-                    self.renderer.drainReorderBuffer()
+-                    self.presentFirstFrameUnderPause(pts: pts.seconds, generation: self.decodeGeneration)
+-                }
+                 let pfType = CVPixelBufferGetPixelFormatType(pixelBuffer)
+                 EngineLog.emit(
+                     "[SWHost] first video frame enqueued: "
+@@ -1365,9 +1367,15 @@ final class SoftwarePlaybackHost {
+             // Paused seek: anchor at target with rate 0 so play() resumes from the seek position (without this, scrubs freeze or drop all samples).
+             audioOutput?.seekClock(to: targetTime, rate: 0)
+             pausedByHost = true
++            pausedBeforeFirstFrame = true
+         }
+         // Arm now so the demux loop doesn't re-arm at stale initialClockTime (a pre-first-audio seek snapped back to session start without this).
+         clockArmed = true
++        if !inFlightSeekResumeIntent, !demuxLoopStarted, let aOut = audioOutput {
++            aOut.attachVideoRenderer(renderer.videoRenderer)
++            demuxLoopStarted = true
++            startDemuxLoop()
++        }
+         // The source stands at the target and the clock is anchored on it: everything the loop
+         // reads from here belongs to this position. Closing the window releases the loop.
+         noteSeekSettled(generation)
+diff --git a/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift b/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift
+index 3355796e..082b6ac8 100644
+--- a/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift
++++ b/Sources/AetherEngine/Network/HTTPRequestAuthorization.swift
+@@ -22,12 +22,13 @@ public final class HTTPRequestAuthorization: Sendable, Equatable {
+ 
+     /// Fetch raw HTTP(S) bytes with the relay's authorization, redirect, retry and TLS policy.
+     /// Rejects non-success responses and bodies exceeding `maximumBytes`, including unknown lengths.
+-    /// The entire transfer is bounded by 20 seconds; cancellation stops pending authorization and I/O.
++    /// The entire transfer is bounded by `timeout`; cancellation stops pending authorization and I/O.
+     /// No static headers are inherited and playlist-looking bodies are returned without rewriting.
+-    public func data(from url: URL, maximumBytes: Int) async throws -> Data {
++    public func data(from url: URL, maximumBytes: Int, timeout: TimeInterval = 20) async throws -> Data {
++        guard timeout.isFinite, timeout > 0 else { throw URLError(.badURL) }
+         let relay = HLSOriginRelay(authorization: self,
+-            resourceTimeout: Self.resourceTransferTimeout,
+-            deadline: Date().addingTimeInterval(Self.resourceTransferTimeout))
++            resourceTimeout: timeout,
++            deadline: Date().addingTimeInterval(timeout))
+         defer { relay.stop() }
+         return try await relay.fetchData(url, maximumBytes: maximumBytes)
+     }
+diff --git a/Sources/AetherEngine/Renderer/SampleBufferRenderer.swift b/Sources/AetherEngine/Renderer/SampleBufferRenderer.swift
+index bdcab9e5..112772f7 100644
+--- a/Sources/AetherEngine/Renderer/SampleBufferRenderer.swift
++++ b/Sources/AetherEngine/Renderer/SampleBufferRenderer.swift
+@@ -382,6 +382,9 @@ final class SampleBufferRenderer: @unchecked Sendable {
+     private func flushFrame(pixelBuffer: CVPixelBuffer, pts: CMTime, hdr10PlusData: Data?,
+                             nextPTS: CMTime? = nil) {
+         let outputBuffer = subtitleCompositor.composite(pixelBuffer, ptsSeconds: pts.seconds)
++        CVBufferSetAttachment(outputBuffer, "AetherSoftwareFrameTime" as CFString,
++            ["pts": NSNumber(value: pts.seconds), "generation": NSNumber(value: flushGeneration)] as CFDictionary,
++            .shouldPropagate)
+         guard let sampleBuffer = createSampleBuffer(
+             from: outputBuffer, pts: pts,
+             duration: Self.frameDuration(from: pts, to: nextPTS)) else {

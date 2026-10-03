@@ -147,6 +147,7 @@ final class AetherPlaybackController {
         #endif
         applyBackgroundPlaybackPreference()
         observeEngine()
+        assSubtitles.renderingTimingDidChange = { [weak self] in self?.refreshSubtitleTiming() }
     }
 
     /// Adopts the device's background-playback choice onto the engine.
@@ -312,6 +313,16 @@ final class AetherPlaybackController {
                     return
                 }
             }
+            guard !Task.isCancelled, intentGeneration == self.transportIntentGeneration,
+                  loadEpoch == self.activeLoadEpoch else { return }
+            if self.engine.videoRoute == .software, !self.engine.hasFirstFrameReadyForDisplay {
+                await self.engine.seek(to: self.engine.clock.sourceTime)
+            }
+            if self.assSubtitles.handlesCurrentTrack {
+                self.engine.pause()
+                self.assSubtitles.holdPresentation()
+            }
+            await self.assSubtitles.prepareForPlayback()
             guard !Task.isCancelled,
                   intentGeneration == self.transportIntentGeneration,
                   loadEpoch == self.activeLoadEpoch,
@@ -342,9 +353,39 @@ final class AetherPlaybackController {
         transportRestoreTask?.cancel()
         transportRestoreTask = nil
         engine.pause()
+        if assSubtitles.handlesCurrentTrack { assSubtitles.holdPresentation() }
     }
 
-    func setRate(_ rate: Float) { engine.setRate(rate) }
+    func setRate(_ rate: Float) {
+        if rate == 0 { pause(); return }
+        // Aether treats a nonzero rate write as Play. Restoring a saved speed
+        // must keep a paused mount parked while subtitles are being prepared.
+        let keepPaused = !shouldPlayWhenReady || transportRestoreTask != nil
+            || engine.state == .loading || engine.state == .paused
+        engine.setRate(rate)
+        if keepPaused { engine.pause() }
+    }
+
+    private func refreshSubtitleTiming() {
+        guard hasCommittedActiveLoad, assSubtitles.handlesCurrentTrack, !engine.isSeeking else { return }
+        engine.pause()
+        assSubtitles.holdPresentation()
+        if shouldPlayWhenReady {
+            play()
+        } else {
+            transportIntentGeneration &+= 1
+            let intent = transportIntentGeneration
+            let epoch = activeLoadEpoch
+            transportRestoreTask?.cancel()
+            transportRestoreTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.assSubtitles.prepareForPlayback()
+                guard !Task.isCancelled, intent == self.transportIntentGeneration,
+                      epoch == self.activeLoadEpoch else { return }
+                self.transportRestoreTask = nil
+            }
+        }
+    }
 
     func setVolume(_ volume: Float) {
         desiredVolume = min(max(volume, 0), 1)
@@ -360,7 +401,7 @@ final class AetherPlaybackController {
 
     var isMuted: Bool { muted }
 
-    func setSpeed(_ rate: Double) { engine.setRate(Float(rate)) }
+    func setSpeed(_ rate: Double) { setRate(Float(rate)) }
 
     func dispose() { stop() }
 
@@ -418,7 +459,17 @@ final class AetherPlaybackController {
 
     func selectSubtitleTrack(id: Int64?) {
         if let id, let aetherID = aetherSubtitleID(forAppID: id) {
+            let authored = engine.subtitleTracks.contains {
+                $0.id == aetherID && ["ass", "ssa"].contains($0.codec.lowercased())
+            }
+            let prepareBeforeResume = authored && hasCommittedActiveLoad && shouldPlayWhenReady
+                && engine.activeSubtitleTrackIndex != aetherID
+            if prepareBeforeResume {
+                engine.pause()
+                assSubtitles.holdPresentation()
+            }
             engine.selectSubtitleTrack(index: aetherID)
+            if prepareBeforeResume { play() }
         } else {
             engine.clearSubtitle()
         }
@@ -507,9 +558,33 @@ final class AetherPlaybackController {
         switch timeline.seekDisposition(forSourceTime: sourceSeconds) {
         case .local(let playerSeconds):
             let seekGeneration = generation
+            let preparesAuthoredTrack = assSubtitles.handlesCurrentTrack
+            let resumesAfterSeek = shouldPlayWhenReady
+            if preparesAuthoredTrack {
+                transportIntentGeneration &+= 1
+                transportRestoreTask?.cancel()
+                transportRestoreTask = nil
+                engine.pause()
+                assSubtitles.holdPresentation()
+            }
+            let seekIntent = transportIntentGeneration
+            await assSubtitles.prepareForSeek(toSourceTime: playerSeconds)
+            guard seekGeneration == generation, !Task.isCancelled else {
+                return .requiresReplan(sourceSeconds: max(0, sourceSeconds))
+            }
             await engine.seek(to: playerSeconds)
             guard seekGeneration == generation else {
                 return .requiresReplan(sourceSeconds: max(0, sourceSeconds))
+            }
+            if preparesAuthoredTrack {
+                await assSubtitles.waitForSeekFrame(atOrAfter: playerSeconds)
+                await assSubtitles.prepareForPlayback()
+                guard seekGeneration == generation, !Task.isCancelled else {
+                    return .requiresReplan(sourceSeconds: max(0, sourceSeconds))
+                }
+                if resumesAfterSeek, shouldPlayWhenReady, seekIntent == transportIntentGeneration {
+                    engine.play()
+                }
             }
             return .completed(sourceSeconds: timeline.sourcePosition(
                 forPlayerTime: engine.clock.currentTime
