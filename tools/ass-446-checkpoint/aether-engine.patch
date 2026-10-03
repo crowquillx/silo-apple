@@ -1,30 +1,40 @@
 diff --git a/Sources/AetherEngine/AetherEngine.swift b/Sources/AetherEngine/AetherEngine.swift
-index b2adb8b6..fa463bc6 100644
+index b2adb8b6..aac0caed 100644
 --- a/Sources/AetherEngine/AetherEngine.swift
 +++ b/Sources/AetherEngine/AetherEngine.swift
-@@ -837,6 +837,17 @@ public final class AetherEngine: ObservableObject {
+@@ -837,6 +837,16 @@ public final class AetherEngine: ObservableObject {
      /// display layer, nil on teardown. Hosts build their sample-buffer PiP ContentSource from it.
      @Published public internal(set) var softwarePiPSource: SoftwarePiPSource?
  
-+    /// Timestamp and generation of the software frame currently held by the
-+    /// display, including a pause between presentation refreshes. Read-only.
++    /// Pixels and timestamp read together from the displayed software surface.
++    /// The surface lookup survives AVFoundation dropping custom CVBuffer attachments.
++    public var softwareDisplayedVideoFrame: (pixelBuffer: CVPixelBuffer, time: SoftwareVideoFrameTime)? {
++        softwareHost?.displayedVideoFrame
++    }
++
 +    public var softwareDisplayedVideoFrameTime: SoftwareVideoFrameTime? {
-+        guard let pixel = softwarePiPSource?.layer.sampleBufferRenderer.displayedPixelBuffer(),
-+              let value = CVBufferCopyAttachment(pixel, "AetherSoftwareFrameTime" as CFString, nil)
-+                as? [String: NSNumber], let pts = value["pts"], let generation = value["generation"],
-+              pts.doubleValue.isFinite else { return nil }
-+        return SoftwareVideoFrameTime(presentation: CMTime(seconds: pts.doubleValue, preferredTimescale: 1_000_000_000),
-+                                      generation: generation.uint64Value)
++        softwareDisplayedVideoFrame?.time
 +    }
 +
      /// #353: the size the software path's picture presents at, in pixels: the coded frame under the
      /// pixel aspect ratio the decoder attached. nil on every other path, before the first frame is
      /// built, and on sources with no video.
 diff --git a/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift b/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift
-index c45c3986..c28de795 100644
+index c45c3986..a5ad8052 100644
 --- a/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift
 +++ b/Sources/AetherEngine/Native/SoftwarePlaybackHost.swift
-@@ -823,15 +823,17 @@ final class SoftwarePlaybackHost {
+@@ -285,6 +285,10 @@ final class SoftwarePlaybackHost {
+         renderer.setFrameEnqueuedObserver(observer)
+     }
+ 
++    var displayedVideoFrame: (pixelBuffer: CVPixelBuffer, time: SoftwareVideoFrameTime)? {
++        renderer.displayedFrame()
++    }
++
+     /// #303: the renderer's own view of what reached the display. Async because the AVFoundation
+     /// accessor is; the memprobe already runs in an async context, so it is read there rather than
+     /// cached, and the line never carries a stale snapshot.
+@@ -823,15 +827,17 @@ final class SoftwarePlaybackHost {
              guard self.decodeGeneration == self.seekGeneration else { return }
              // Decoder callback is off-main; SampleBufferRenderer is internally locked.
              self.renderer.enqueue(pixelBuffer: pixelBuffer, pts: pts, hdr10PlusData: hdr10PlusData)
@@ -48,7 +58,7 @@ index c45c3986..c28de795 100644
                  let pfType = CVPixelBufferGetPixelFormatType(pixelBuffer)
                  EngineLog.emit(
                      "[SWHost] first video frame enqueued: "
-@@ -1365,9 +1367,15 @@ final class SoftwarePlaybackHost {
+@@ -1365,9 +1371,15 @@ final class SoftwarePlaybackHost {
              // Paused seek: anchor at target with rate 0 so play() resumes from the seek position (without this, scrubs freeze or drop all samples).
              audioOutput?.seekClock(to: targetTime, rate: 0)
              pausedByHost = true
@@ -87,13 +97,62 @@ index 3355796e..082b6ac8 100644
          return try await relay.fetchData(url, maximumBytes: maximumBytes)
      }
 diff --git a/Sources/AetherEngine/Renderer/SampleBufferRenderer.swift b/Sources/AetherEngine/Renderer/SampleBufferRenderer.swift
-index bdcab9e5..112772f7 100644
+index bdcab9e5..ab6453d5 100644
 --- a/Sources/AetherEngine/Renderer/SampleBufferRenderer.swift
 +++ b/Sources/AetherEngine/Renderer/SampleBufferRenderer.swift
-@@ -382,6 +382,9 @@ final class SampleBufferRenderer: @unchecked Sendable {
+@@ -2,6 +2,7 @@ import Foundation
+ import AVFoundation
+ import CoreMedia
+ import CoreVideo
++import IOSurface
+ 
+ /// Video renderer using AVSampleBufferDisplayLayer for optimal frame pacing.
+ ///
+@@ -38,6 +39,20 @@ final class SampleBufferRenderer: @unchecked Sendable {
+     /// #311: fires for every frame handed to the queue target, on the decode thread. Guarded by
+     /// `reorderLock` for the swap only; the call itself happens with no lock held, so a host that
+     /// re-enters the renderer from it cannot deadlock.
++    // AVFoundation may return the displayed IOSurface without custom CVBuffer
++    // attachments. Keep its frame identity separately without retaining pixels.
++    private var frameSurfaceTimes: [IOSurfaceID: SoftwareVideoFrameTime] = [:]
++    private var frameSurfaceOrder: [IOSurfaceID] = []
++
++    func displayedFrame() -> (pixelBuffer: CVPixelBuffer, time: SoftwareVideoFrameTime)? {
++        guard let pixel = videoRenderer.displayedPixelBuffer(),
++              let surface = CVPixelBufferGetIOSurface(pixel)?.takeUnretainedValue() else { return nil }
++        reorderLock.lock()
++        defer { reorderLock.unlock() }
++        guard let time = frameSurfaceTimes[IOSurfaceGetID(surface)] else { return nil }
++        return (pixel, time)
++    }
++
+     private var _frameEnqueuedObserver: SoftwareVideoFrameTimeObserver?
+     func setFrameEnqueuedObserver(_ observer: SoftwareVideoFrameTimeObserver?) {
+         reorderLock.lock()
+@@ -353,6 +368,10 @@ final class SampleBufferRenderer: @unchecked Sendable {
+         _newestEnqueuedPtsSeconds = nil
+         // #311: everything reported before this point describes frames that are now gone.
+         _flushGeneration = SampleBufferRenderer.flushGenerations.next()
++        if removingDisplayedImage {
++            frameSurfaceTimes.removeAll(keepingCapacity: true)
++            frameSurfaceOrder.removeAll(keepingCapacity: true)
++        }
+         // Invalidate the format description cache; the next load() may open a stream with different colorimetry at the same resolution.
+         cachedFormatDesc = nil
+         cachedFormatKey = nil
+@@ -382,6 +401,18 @@ final class SampleBufferRenderer: @unchecked Sendable {
      private func flushFrame(pixelBuffer: CVPixelBuffer, pts: CMTime, hdr10PlusData: Data?,
                              nextPTS: CMTime? = nil) {
          let outputBuffer = subtitleCompositor.composite(pixelBuffer, ptsSeconds: pts.seconds)
++        if let surface = CVPixelBufferGetIOSurface(outputBuffer)?.takeUnretainedValue() {
++            let id = IOSurfaceGetID(surface)
++            reorderLock.lock()
++            frameSurfaceTimes[id] = SoftwareVideoFrameTime(presentation: pts, generation: _flushGeneration)
++            frameSurfaceOrder.removeAll { $0 == id }
++            frameSurfaceOrder.append(id)
++            while frameSurfaceOrder.count > 64 { frameSurfaceTimes.removeValue(forKey: frameSurfaceOrder.removeFirst()) }
++            reorderLock.unlock()
++        }
 +        CVBufferSetAttachment(outputBuffer, "AetherSoftwareFrameTime" as CFString,
 +            ["pts": NSNumber(value: pts.seconds), "generation": NSNumber(value: flushGeneration)] as CFDictionary,
 +            .shouldPropagate)
